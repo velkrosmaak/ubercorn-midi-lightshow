@@ -1,0 +1,20 @@
+{
+  "brightness": 0.8,
+  "fps": 60,
+  "rotation": 0,
+  "speed": 1.0,
+  "hue_shift": 0.0,
+  "saturation": 1.0,
+  "blur": 0.0,
+  "particle_den": 64,
+  "strobe_rate": 0.0,
+  "sustain": false,
+  "attract_mode": true,
+  "attract_interval": 4.0,
+  "max_layers": 12,
+  "midi_host": "0.0.0.0",
+  "midi_port": 5004,
+  "blackout": false,
+  "restart": false,
+  "_updated_at": 1780787334.61413
+}

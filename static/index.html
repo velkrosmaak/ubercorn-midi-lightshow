@@ -1,0 +1,950 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>UBERCORN // MIDI LIGHT SHOW</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Orbitron:wght@400;700;900&display=swap" rel="stylesheet">
+<style>
+/* ── reset & base ─────────────────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg:        #0a0a0c;
+  --panel:     #111117;
+  --panel2:    #16161f;
+  --border:    #2a2a3a;
+  --accent:    #00ffe7;
+  --accent2:   #ff3cac;
+  --accent3:   #ffe600;
+  --text:      #c8cce8;
+  --text-dim:  #5a5a7a;
+  --danger:    #ff4444;
+  --green:     #00ff88;
+  --glow-c:    0 0 8px var(--accent), 0 0 24px rgba(0,255,231,0.3);
+  --glow-r:    0 0 8px var(--accent2), 0 0 24px rgba(255,60,172,0.3);
+  --glow-y:    0 0 8px var(--accent3), 0 0 24px rgba(255,230,0,0.3);
+  --radius:    6px;
+  --font-mono: 'Share Tech Mono', monospace;
+  --font-head: 'Orbitron', monospace;
+}
+
+html, body {
+  height: 100%;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 13px;
+  overflow-x: hidden;
+}
+
+/* ── scanline overlay ─────────────────────────────────────────────────── */
+body::before {
+  content: '';
+  position: fixed; inset: 0;
+  background: repeating-linear-gradient(
+    0deg,
+    transparent,
+    transparent 2px,
+    rgba(0,0,0,0.08) 2px,
+    rgba(0,0,0,0.08) 4px
+  );
+  pointer-events: none;
+  z-index: 9999;
+}
+
+/* ── layout ───────────────────────────────────────────────────────────── */
+.app {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 16px;
+}
+
+/* ── header ───────────────────────────────────────────────────────────── */
+header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 20px;
+  border: 1px solid var(--border);
+  border-bottom: 2px solid var(--accent);
+  background: var(--panel);
+  margin-bottom: 16px;
+  border-radius: var(--radius) var(--radius) 0 0;
+  position: relative;
+  overflow: hidden;
+}
+header::before {
+  content: '';
+  position: absolute; top: 0; left: 0; right: 0; height: 1px;
+  background: linear-gradient(90deg, transparent, var(--accent), transparent);
+  animation: shimmer 3s ease-in-out infinite;
+}
+@keyframes shimmer { 0%,100%{opacity:.4} 50%{opacity:1} }
+
+.logo {
+  font-family: var(--font-head);
+  font-size: 22px;
+  font-weight: 900;
+  letter-spacing: 4px;
+  color: var(--accent);
+  text-shadow: var(--glow-c);
+}
+.logo span { color: var(--accent2); text-shadow: var(--glow-r); }
+
+.header-right {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+/* ── status pill ──────────────────────────────────────────────────────── */
+.status-pill {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 12px;
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  background: var(--panel2);
+  font-size: 11px;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+}
+.status-dot {
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  background: var(--text-dim);
+  transition: background .3s, box-shadow .3s;
+}
+.status-dot.running {
+  background: var(--green);
+  box-shadow: 0 0 6px var(--green);
+  animation: pulse-dot 1.5s ease-in-out infinite;
+}
+@keyframes pulse-dot { 0%,100%{opacity:1} 50%{opacity:.5} }
+
+/* ── grid ─────────────────────────────────────────────────────────────── */
+.grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 12px;
+}
+.grid-wide { grid-column: 1 / -1; }
+.grid-half { grid-column: span 1; }
+
+@media (max-width: 760px) {
+  .grid { grid-template-columns: 1fr; }
+  .grid-wide, .grid-half { grid-column: span 1; }
+}
+
+/* ── module panels ────────────────────────────────────────────────────── */
+.module {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+.module-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel2);
+}
+.module-dot {
+  width: 6px; height: 6px;
+  border-radius: 50%;
+}
+.module-title {
+  font-family: var(--font-head);
+  font-size: 10px;
+  letter-spacing: 3px;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+.module-body { padding: 14px; }
+
+/* ── knob rows ────────────────────────────────────────────────────────── */
+.knob-row {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.control-group {
+  display: grid;
+  grid-template-columns: 110px 1fr 52px;
+  align-items: center;
+  gap: 10px;
+}
+
+.ctrl-label {
+  font-size: 11px;
+  color: var(--text-dim);
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.ctrl-value {
+  font-size: 12px;
+  color: var(--accent);
+  text-shadow: var(--glow-c);
+  text-align: right;
+  font-family: var(--font-head);
+  min-width: 48px;
+}
+.ctrl-value.pink { color: var(--accent2); text-shadow: var(--glow-r); }
+.ctrl-value.yellow { color: var(--accent3); text-shadow: var(--glow-y); }
+
+/* ── range sliders ────────────────────────────────────────────────────── */
+input[type="range"] {
+  -webkit-appearance: none;
+  width: 100%;
+  height: 4px;
+  background: var(--border);
+  border-radius: 2px;
+  outline: none;
+  cursor: pointer;
+  position: relative;
+}
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 14px; height: 14px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 6px var(--accent);
+  cursor: pointer;
+  transition: transform .1s;
+}
+input[type="range"]::-webkit-slider-thumb:active { transform: scale(1.3); }
+input[type="range"].pink::-webkit-slider-thumb  { background: var(--accent2); box-shadow: 0 0 6px var(--accent2); }
+input[type="range"].yellow::-webkit-slider-thumb { background: var(--accent3); box-shadow: 0 0 6px var(--accent3); }
+
+/* colour tint on fill – using CSS gradient trick */
+input[type="range"].teal  { background: linear-gradient(to right, var(--accent) var(--pct,50%), var(--border) var(--pct,50%)); }
+input[type="range"].pink  { background: linear-gradient(to right, var(--accent2) var(--pct,50%), var(--border) var(--pct,50%)); }
+input[type="range"].yellow{ background: linear-gradient(to right, var(--accent3) var(--pct,50%), var(--border) var(--pct,50%)); }
+
+/* ── buttons ──────────────────────────────────────────────────────────── */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 8px 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--panel2);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  letter-spacing: 1px;
+  cursor: pointer;
+  transition: all .15s;
+  text-transform: uppercase;
+}
+.btn:hover { border-color: var(--accent); color: var(--accent); box-shadow: var(--glow-c); }
+.btn.active { background: rgba(0,255,231,0.12); border-color: var(--accent); color: var(--accent); }
+.btn.danger  { border-color: var(--danger); color: var(--danger); }
+.btn.danger:hover  { background: rgba(255,68,68,.15); box-shadow: 0 0 8px var(--danger); }
+.btn.success { border-color: var(--green); color: var(--green); }
+.btn.success:hover { background: rgba(0,255,136,.12); box-shadow: 0 0 8px var(--green); }
+.btn.pink    { border-color: var(--accent2); color: var(--accent2); }
+.btn.pink:hover { background: rgba(255,60,172,.12); box-shadow: var(--glow-r); }
+.btn.yellow  { border-color: var(--accent3); color: var(--accent3); }
+.btn.yellow:hover { background: rgba(255,230,0,.1); box-shadow: var(--glow-y); }
+
+.btn-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+/* ── toggle buttons ───────────────────────────────────────────────────── */
+.toggle-btn {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  cursor: pointer;
+  user-select: none;
+}
+.toggle-track {
+  width: 36px; height: 18px;
+  background: var(--border);
+  border-radius: 9px;
+  border: 1px solid var(--border);
+  position: relative;
+  transition: background .2s;
+}
+.toggle-track::after {
+  content: '';
+  position: absolute;
+  top: 2px; left: 2px;
+  width: 12px; height: 12px;
+  border-radius: 50%;
+  background: var(--text-dim);
+  transition: transform .2s, background .2s;
+}
+.toggle-btn.on .toggle-track { background: rgba(0,255,231,0.15); border-color: var(--accent); }
+.toggle-btn.on .toggle-track::after { transform: translateX(18px); background: var(--accent); box-shadow: 0 0 6px var(--accent); }
+.toggle-label { font-size: 11px; letter-spacing: 1px; text-transform: uppercase; color: var(--text-dim); }
+.toggle-btn.on .toggle-label { color: var(--accent); }
+
+/* ── number inputs ────────────────────────────────────────────────────── */
+.num-input {
+  background: var(--panel2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--accent);
+  font-family: var(--font-head);
+  font-size: 13px;
+  padding: 6px 10px;
+  width: 80px;
+  text-align: center;
+  outline: none;
+  transition: border-color .2s;
+}
+.num-input:focus { border-color: var(--accent); box-shadow: var(--glow-c); }
+.num-input.pink { color: var(--accent2); }
+.num-input.pink:focus { border-color: var(--accent2); box-shadow: var(--glow-r); }
+
+/* ── select ───────────────────────────────────────────────────────────── */
+select.styled {
+  background: var(--panel2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  padding: 7px 10px;
+  outline: none;
+  cursor: pointer;
+  transition: border-color .2s;
+}
+select.styled:focus { border-color: var(--accent); }
+
+/* ── matrix preview ───────────────────────────────────────────────────── */
+.led-grid {
+  display: grid;
+  grid-template-columns: repeat(16, 1fr);
+  gap: 2px;
+  padding: 12px;
+  background: #060608;
+  border-radius: 4px;
+}
+.led {
+  aspect-ratio: 1;
+  border-radius: 2px;
+  background: #111118;
+  transition: background .08s;
+}
+
+/* ── MIDI log ─────────────────────────────────────────────────────────── */
+.midi-log {
+  background: #060608;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 10px;
+  height: 110px;
+  overflow-y: auto;
+  font-size: 11px;
+  line-height: 1.7;
+  color: var(--text-dim);
+}
+.midi-log .entry { display: flex; gap: 10px; }
+.midi-log .ts { color: #3a3a5a; flex-shrink: 0; }
+.midi-log .note-on  { color: var(--green); }
+.midi-log .note-off { color: #555577; }
+.midi-log .cc       { color: var(--accent3); }
+.midi-log .sys      { color: var(--accent2); }
+
+/* ── footer ───────────────────────────────────────────────────────────── */
+footer {
+  margin-top: 14px;
+  text-align: center;
+  font-size: 10px;
+  color: var(--text-dim);
+  letter-spacing: 2px;
+}
+
+/* ── divider ──────────────────────────────────────────────────────────── */
+.divider {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 12px 0;
+}
+
+/* ── toast notifications ──────────────────────────────────────────────── */
+#toast-container {
+  position: fixed;
+  bottom: 20px;
+  right: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  z-index: 10000;
+}
+.toast {
+  padding: 9px 16px;
+  border-radius: var(--radius);
+  background: var(--panel2);
+  border: 1px solid var(--accent);
+  color: var(--accent);
+  font-size: 11px;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  animation: toast-in .2s ease forwards;
+  box-shadow: var(--glow-c);
+}
+.toast.err { border-color: var(--danger); color: var(--danger); box-shadow: none; }
+@keyframes toast-in { from{opacity:0;transform:translateX(20px)} to{opacity:1;transform:none} }
+
+/* ── two-col inside module ────────────────────────────────────────────── */
+.two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; align-items: center; }
+.two-col .ctrl-label { font-size: 11px; color: var(--text-dim); letter-spacing:1px; text-transform: uppercase; }
+</style>
+</head>
+<body>
+<div class="app">
+
+  <!-- HEADER -->
+  <header>
+    <div class="logo">UBER<span>CORN</span></div>
+    <div class="header-right">
+      <div class="status-pill">
+        <div class="status-dot" id="status-dot"></div>
+        <span id="status-label">OFFLINE</span>
+      </div>
+      <button class="btn success" id="btn-start" onclick="startShow()">▶ START</button>
+      <button class="btn danger"  id="btn-stop"  onclick="stopShow()">■ STOP</button>
+      <button class="btn yellow"  onclick="restartShow()">↺ RESTART</button>
+    </div>
+  </header>
+
+  <div class="grid">
+
+    <!-- ── DISPLAY MODULE ── -->
+    <div class="module grid-half">
+      <div class="module-header">
+        <div class="module-dot" style="background:var(--accent)"></div>
+        <span class="module-title">Display</span>
+      </div>
+      <div class="module-body knob-row">
+
+        <div class="control-group">
+          <span class="ctrl-label">Brightness</span>
+          <input type="range" class="teal" id="s-brightness" min="0" max="100" step="1"
+                 oninput="slideUpdate(this,'brightness',v=>v/100,'pct','v-brightness')">
+          <span class="ctrl-value" id="v-brightness">0.80</span>
+        </div>
+
+        <div class="control-group">
+          <span class="ctrl-label">FPS</span>
+          <input type="range" class="teal" id="s-fps" min="10" max="60" step="1"
+                 oninput="slideUpdate(this,'fps',v=>parseInt(v),'int','v-fps')">
+          <span class="ctrl-value" id="v-fps">60</span>
+        </div>
+
+        <div class="control-group">
+          <span class="ctrl-label">Rotation</span>
+          <select class="styled" id="sel-rotation" onchange="selUpdate('rotation', parseInt(this.value))">
+            <option value="0">0°</option>
+            <option value="90">90°</option>
+            <option value="180">180°</option>
+            <option value="270">270°</option>
+          </select>
+          <span class="ctrl-value" id="v-rotation">0°</span>
+        </div>
+
+        <hr class="divider">
+
+        <div class="btn-row">
+          <div class="toggle-btn" id="tog-blackout" onclick="toggleParam('blackout','tog-blackout')">
+            <div class="toggle-track"></div>
+            <span class="toggle-label">Blackout</span>
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+    <!-- ── ANIMATION MODULE ── -->
+    <div class="module grid-half">
+      <div class="module-header">
+        <div class="module-dot" style="background:var(--accent2)"></div>
+        <span class="module-title">Animation</span>
+      </div>
+      <div class="module-body knob-row">
+
+        <div class="control-group">
+          <span class="ctrl-label">Speed</span>
+          <input type="range" class="pink" id="s-speed" min="2" max="40" step="1"
+                 oninput="slideUpdate(this,'speed',v=>v/10,'pct','v-speed')">
+          <span class="ctrl-value pink" id="v-speed">1.0×</span>
+        </div>
+
+        <div class="control-group">
+          <span class="ctrl-label">Hue Shift</span>
+          <input type="range" class="pink" id="s-hue_shift" min="0" max="360" step="1"
+                 oninput="slideUpdate(this,'hue_shift',v=>parseInt(v),'int','v-hue_shift')">
+          <span class="ctrl-value pink" id="v-hue_shift">0°</span>
+        </div>
+
+        <div class="control-group">
+          <span class="ctrl-label">Saturation</span>
+          <input type="range" class="pink" id="s-saturation" min="0" max="100" step="1"
+                 oninput="slideUpdate(this,'saturation',v=>v/100,'pct','v-saturation')">
+          <span class="ctrl-value pink" id="v-saturation">1.00</span>
+        </div>
+
+        <div class="control-group">
+          <span class="ctrl-label">Blur / Glow</span>
+          <input type="range" class="pink" id="s-blur" min="0" max="100" step="1"
+                 oninput="slideUpdate(this,'blur',v=>v/100,'pct','v-blur')">
+          <span class="ctrl-value pink" id="v-blur">0.00</span>
+        </div>
+
+        <div class="control-group">
+          <span class="ctrl-label">Particles</span>
+          <input type="range" class="pink" id="s-particle_den" min="0" max="127" step="1"
+                 oninput="slideUpdate(this,'particle_den',v=>parseInt(v),'int','v-particle_den')">
+          <span class="ctrl-value pink" id="v-particle_den">64</span>
+        </div>
+
+      </div>
+    </div>
+
+    <!-- ── EFFECTS MODULE ── -->
+    <div class="module grid-half">
+      <div class="module-header">
+        <div class="module-dot" style="background:var(--accent3)"></div>
+        <span class="module-title">Effects</span>
+      </div>
+      <div class="module-body knob-row">
+
+        <div class="control-group">
+          <span class="ctrl-label">Strobe Hz</span>
+          <input type="range" class="yellow" id="s-strobe_rate" min="0" max="30" step="0.5"
+                 oninput="slideUpdate(this,'strobe_rate',v=>parseFloat(v),'float','v-strobe_rate')">
+          <span class="ctrl-value yellow" id="v-strobe_rate">OFF</span>
+        </div>
+
+        <div class="control-group">
+          <span class="ctrl-label">Max Layers</span>
+          <input type="range" class="yellow" id="s-max_layers" min="1" max="24" step="1"
+                 oninput="slideUpdate(this,'max_layers',v=>parseInt(v),'int','v-max_layers')">
+          <span class="ctrl-value yellow" id="v-max_layers">12</span>
+        </div>
+
+        <div class="control-group">
+          <span class="ctrl-label">Attract Int.</span>
+          <input type="range" class="yellow" id="s-attract_interval" min="1" max="20" step="0.5"
+                 oninput="slideUpdate(this,'attract_interval',v=>parseFloat(v),'float','v-attract_interval')">
+          <span class="ctrl-value yellow" id="v-attract_interval">4.0s</span>
+        </div>
+
+        <hr class="divider">
+
+        <div class="btn-row">
+          <div class="toggle-btn" id="tog-sustain" onclick="toggleParam('sustain','tog-sustain')">
+            <div class="toggle-track"></div>
+            <span class="toggle-label">Sustain Bloom</span>
+          </div>
+          <div class="toggle-btn" id="tog-attract_mode" onclick="toggleParam('attract_mode','tog-attract_mode')">
+            <div class="toggle-track"></div>
+            <span class="toggle-label">Attract Mode</span>
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+    <!-- ── MIDI / NETWORK MODULE ── -->
+    <div class="module grid-half">
+      <div class="module-header">
+        <div class="module-dot" style="background:#7b61ff"></div>
+        <span class="module-title">MIDI / Network</span>
+      </div>
+      <div class="module-body">
+        <div class="knob-row">
+
+          <div class="two-col">
+            <span class="ctrl-label">MIDI Host</span>
+            <input type="text" class="num-input pink" id="inp-midi_host" value="0.0.0.0"
+                   style="width:100%" onchange="setConfigKey('midi_host',this.value)">
+          </div>
+
+          <div class="two-col">
+            <span class="ctrl-label">MIDI Port</span>
+            <input type="number" class="num-input" id="inp-midi_port" min="1024" max="65535"
+                   value="5004" onchange="setConfigKey('midi_port',parseInt(this.value))">
+          </div>
+
+          <hr class="divider">
+
+          <div class="btn-row">
+            <button class="btn" onclick="applyMidiSettings()">↑ Apply & Restart MIDI</button>
+          </div>
+
+          <div style="margin-top:4px">
+            <div class="ctrl-label" style="margin-bottom:6px">CC Quick Reference</div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:3px 10px;font-size:10px;color:var(--text-dim)">
+              <span>CC 1  → Brightness</span><span>CC 7  → Speed</span>
+              <span>CC 10 → Hue Shift</span><span>CC 16 → Strobe</span>
+              <span>CC 17 → Particles</span><span>CC 18 → Saturation</span>
+              <span>CC 64 → Sustain</span><span>CC 74 → Blur</span>
+              <span>CC 121→ Reset All</span>
+            </div>
+          </div>
+
+        </div>
+      </div>
+    </div>
+
+    <!-- ── LED PREVIEW MODULE ── -->
+    <div class="module grid-wide">
+      <div class="module-header">
+        <div class="module-dot" style="background:var(--green)"></div>
+        <span class="module-title">Live Preview (simulated)</span>
+        <span style="margin-left:auto;font-size:10px;color:var(--text-dim)">Updates every 200ms</span>
+      </div>
+      <div class="module-body">
+        <div class="led-grid" id="led-grid">
+          <!-- 256 LEDs injected by JS -->
+        </div>
+      </div>
+    </div>
+
+    <!-- ── PRESETS MODULE ── -->
+    <div class="module grid-half">
+      <div class="module-header">
+        <div class="module-dot" style="background:var(--accent2)"></div>
+        <span class="module-title">Quick Presets</span>
+      </div>
+      <div class="module-body">
+        <div class="btn-row" style="flex-wrap:wrap">
+          <button class="btn" onclick="applyPreset('rave')">🎉 Rave</button>
+          <button class="btn" onclick="applyPreset('chill')">🌊 Chill</button>
+          <button class="btn" onclick="applyPreset('strobe')">⚡ Strobe</button>
+          <button class="btn" onclick="applyPreset('mono')">◆ Mono</button>
+          <button class="btn" onclick="applyPreset('rainbow')">🌈 Rainbow</button>
+          <button class="btn" onclick="applyPreset('subtle')">◌ Subtle</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── PROCESS CONTROL MODULE ── -->
+    <div class="module grid-half">
+      <div class="module-header">
+        <div class="module-dot" style="background:var(--danger)"></div>
+        <span class="module-title">System</span>
+      </div>
+      <div class="module-body">
+        <div class="knob-row">
+          <div class="btn-row">
+            <button class="btn success" onclick="startShow()">▶ Start Show</button>
+            <button class="btn danger"  onclick="stopShow()">■ Stop Show</button>
+            <button class="btn yellow"  onclick="restartShow()">↺ Restart</button>
+          </div>
+          <div class="btn-row">
+            <button class="btn pink" onclick="resetAll()">↩ Reset All Params</button>
+          </div>
+          <div style="margin-top:4px">
+            <div class="ctrl-label" style="margin-bottom:5px">Activity Log</div>
+            <div class="midi-log" id="midi-log"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div><!-- /grid -->
+
+  <footer>UBERCORN MIDI LIGHT SHOW // PIMORONI UNICORN HAT HD // RASPBERRY PI ZERO</footer>
+</div><!-- /app -->
+
+<div id="toast-container"></div>
+
+<script>
+/* ── state ──────────────────────────────────────────────────────────────── */
+let cfg = {};
+const sendQueue = [];
+let sendTimer = null;
+let simT = 0;
+
+/* ── LED grid init ──────────────────────────────────────────────────────── */
+const ledGrid = document.getElementById('led-grid');
+for (let i = 0; i < 256; i++) {
+  const led = document.createElement('div');
+  led.className = 'led';
+  led.id = `led-${i}`;
+  ledGrid.appendChild(led);
+}
+
+/* ── toast ──────────────────────────────────────────────────────────────── */
+function toast(msg, isErr = false) {
+  const el = document.createElement('div');
+  el.className = 'toast' + (isErr ? ' err' : '');
+  el.textContent = msg;
+  document.getElementById('toast-container').appendChild(el);
+  setTimeout(() => el.remove(), 3000);
+}
+
+/* ── log ────────────────────────────────────────────────────────────────── */
+function log(msg, cls = '') {
+  const el = document.getElementById('midi-log');
+  const ts = new Date().toTimeString().slice(0,8);
+  el.innerHTML += `<div class="entry"><span class="ts">${ts}</span><span class="${cls}">${msg}</span></div>`;
+  el.scrollTop = el.scrollHeight;
+}
+
+/* ── API helpers ────────────────────────────────────────────────────────── */
+async function api(path, method = 'GET', body = null) {
+  const opts = { method, headers: {'Content-Type':'application/json'} };
+  if (body) opts.body = JSON.stringify(body);
+  try {
+    const r = await fetch(path, opts);
+    return await r.json();
+  } catch (e) {
+    toast('API error: ' + e.message, true);
+    return null;
+  }
+}
+
+/* ── debounced config send ──────────────────────────────────────────────── */
+const pending = {};
+function queueSend(key, value) {
+  pending[key] = value;
+  clearTimeout(sendTimer);
+  sendTimer = setTimeout(flushPending, 120);
+}
+async function flushPending() {
+  if (Object.keys(pending).length === 0) return;
+  const payload = {...pending};
+  Object.keys(pending).forEach(k => delete pending[k]);
+  await api('/api/config', 'POST', payload);
+}
+
+/* ── slider update ──────────────────────────────────────────────────────── */
+function slideUpdate(el, key, transform, type, valId) {
+  const raw = parseFloat(el.value);
+  const val = transform(raw);
+
+  // update fill
+  const min = parseFloat(el.min), max = parseFloat(el.max);
+  const pct = ((raw - min) / (max - min) * 100).toFixed(1) + '%';
+  el.style.setProperty('--pct', pct);
+
+  // update display
+  const vEl = document.getElementById(valId);
+  if (vEl) {
+    if (key === 'speed')          vEl.textContent = val.toFixed(1) + '×';
+    else if (key === 'hue_shift') vEl.textContent = val + '°';
+    else if (key === 'strobe_rate') vEl.textContent = val === 0 ? 'OFF' : val.toFixed(1) + ' Hz';
+    else if (key === 'attract_interval') vEl.textContent = val.toFixed(1) + 's';
+    else if (type === 'pct')      vEl.textContent = val.toFixed(2);
+    else                          vEl.textContent = val;
+  }
+
+  cfg[key] = val;
+  queueSend(key, val);
+}
+
+function selUpdate(key, value) {
+  cfg[key] = value;
+  queueSend(key, value);
+  const vEl = document.getElementById('v-' + key);
+  if (vEl) vEl.textContent = value + '°';
+}
+
+function setConfigKey(key, value) {
+  cfg[key] = value;
+  queueSend(key, value);
+}
+
+/* ── toggle ─────────────────────────────────────────────────────────────── */
+function toggleParam(key, elId) {
+  const newVal = !cfg[key];
+  cfg[key] = newVal;
+  const el = document.getElementById(elId);
+  el.classList.toggle('on', newVal);
+  queueSend(key, newVal);
+}
+
+/* ── load config into UI ────────────────────────────────────────────────── */
+function applyConfigToUI(c) {
+  cfg = c;
+
+  // sliders
+  const sliders = {
+    'brightness':       [c.brightness * 100,      v => v/100],
+    'fps':              [c.fps,                   null],
+    'speed':            [c.speed * 10,            null],
+    'hue_shift':        [c.hue_shift,             null],
+    'saturation':       [c.saturation * 100,      v => v/100],
+    'blur':             [c.blur * 100,            v => v/100],
+    'particle_den':     [c.particle_den,          null],
+    'strobe_rate':      [c.strobe_rate,           null],
+    'max_layers':       [c.max_layers,            null],
+    'attract_interval': [c.attract_interval,      null],
+  };
+
+  for (const [key, [raw]] of Object.entries(sliders)) {
+    const el = document.getElementById('s-' + key);
+    if (!el) continue;
+    el.value = raw;
+    const min = parseFloat(el.min), max = parseFloat(el.max);
+    const pct = ((raw - min) / (max - min) * 100).toFixed(1) + '%';
+    el.style.setProperty('--pct', pct);
+  }
+
+  // value labels
+  document.getElementById('v-brightness').textContent    = c.brightness.toFixed(2);
+  document.getElementById('v-fps').textContent           = c.fps;
+  document.getElementById('v-speed').textContent         = c.speed.toFixed(1) + '×';
+  document.getElementById('v-hue_shift').textContent     = Math.round(c.hue_shift) + '°';
+  document.getElementById('v-saturation').textContent    = c.saturation.toFixed(2);
+  document.getElementById('v-blur').textContent          = c.blur.toFixed(2);
+  document.getElementById('v-particle_den').textContent  = c.particle_den;
+  document.getElementById('v-strobe_rate').textContent   = c.strobe_rate === 0 ? 'OFF' : c.strobe_rate.toFixed(1) + ' Hz';
+  document.getElementById('v-max_layers').textContent    = c.max_layers;
+  document.getElementById('v-attract_interval').textContent = c.attract_interval.toFixed(1) + 's';
+  document.getElementById('v-rotation').textContent      = c.rotation + '°';
+
+  // select
+  document.getElementById('sel-rotation').value = c.rotation;
+
+  // text inputs
+  document.getElementById('inp-midi_host').value = c.midi_host;
+  document.getElementById('inp-midi_port').value = c.midi_port;
+
+  // toggles
+  ['blackout', 'sustain', 'attract_mode'].forEach(k => {
+    const el = document.getElementById('tog-' + k);
+    if (el) el.classList.toggle('on', !!c[k]);
+  });
+}
+
+/* ── process control ────────────────────────────────────────────────────── */
+async function startShow() {
+  const r = await api('/api/process/start', 'POST');
+  if (r?.ok) { toast('Light show started'); log('Show started', 'sys'); }
+  else toast(r?.msg || 'Failed to start', true);
+  pollStatus();
+}
+async function stopShow() {
+  const r = await api('/api/process/stop', 'POST');
+  if (r?.ok) { toast('Light show stopped'); log('Show stopped', 'sys'); }
+  else toast(r?.msg || 'Failed to stop', true);
+  pollStatus();
+}
+async function restartShow() {
+  log('Restart requested…', 'sys');
+  const r = await api('/api/process/restart', 'POST');
+  if (r?.ok) toast('Restart flag set');
+  else toast('Restart failed', true);
+}
+async function applyMidiSettings() {
+  await flushPending();
+  await restartShow();
+  toast('MIDI settings applied – restarting');
+}
+async function resetAll() {
+  const r = await api('/api/reset', 'POST');
+  if (r?.ok) { applyConfigToUI(r.config); toast('All params reset'); log('Reset all', 'sys'); }
+}
+
+/* ── quick presets ──────────────────────────────────────────────────────── */
+const PRESETS = {
+  rave:    { brightness:1.0, speed:2.5, saturation:1.0, strobe_rate:8, blur:0.2, particle_den:100, hue_shift:0, sustain:false },
+  chill:   { brightness:0.5, speed:0.4, saturation:0.8, strobe_rate:0, blur:0.5, particle_den:30,  hue_shift:180, sustain:true },
+  strobe:  { brightness:1.0, speed:1.0, saturation:0.4, strobe_rate:20, blur:0, particle_den:64,  hue_shift:0,   sustain:false },
+  mono:    { brightness:0.9, speed:1.0, saturation:0.0, strobe_rate:0,  blur:0.1, particle_den:64, hue_shift:0,  sustain:false },
+  rainbow: { brightness:0.9, speed:1.5, saturation:1.0, strobe_rate:0,  blur:0.3, particle_den:80, hue_shift:0,  sustain:false },
+  subtle:  { brightness:0.3, speed:0.6, saturation:0.7, strobe_rate:0,  blur:0.6, particle_den:20, hue_shift:90, sustain:true  },
+};
+async function applyPreset(name) {
+  const preset = PRESETS[name];
+  if (!preset) return;
+  const r = await api('/api/config', 'POST', preset);
+  if (r?.ok) { applyConfigToUI({...cfg, ...preset}); toast('Preset: ' + name.toUpperCase()); log('Preset: ' + name, 'sys'); }
+}
+
+/* ── status polling ─────────────────────────────────────────────────────── */
+async function pollStatus() {
+  const r = await api('/api/process/status');
+  const running = r?.running;
+  document.getElementById('status-dot').classList.toggle('running', !!running);
+  document.getElementById('status-label').textContent = running ? `PID ${r.pid}` : 'OFFLINE';
+}
+
+/* ── LED preview simulation ─────────────────────────────────────────────── */
+function hsvToRgb(h, s, v) {
+  h = h % 1; if (h < 0) h += 1;
+  const i = Math.floor(h*6), f = h*6-i;
+  const p=v*(1-s), q=v*(1-f*s), t=v*(1-(1-f)*s);
+  let r,g,b;
+  switch(i%6){case 0:r=v;g=t;b=p;break;case 1:r=q;g=v;b=p;break;
+    case 2:r=p;g=v;b=t;break;case 3:r=p;g=q;b=v;break;
+    case 4:r=t;g=p;b=v;break;case 5:r=v;g=p;b=q;break;}
+  return [Math.round(r*255), Math.round(g*255), Math.round(b*255)];
+}
+
+function renderSim() {
+  simT += 0.04 * (cfg.speed || 1.0);
+  const hueShift = (cfg.hue_shift || 0) / 360;
+  const sat = cfg.saturation ?? 1.0;
+  const bri = cfg.brightness ?? 0.8;
+  const blur = cfg.blur ?? 0;
+  const blackout = cfg.blackout;
+  const strobe = cfg.strobe_rate > 0 && (Math.floor(simT * cfg.strobe_rate * 0.5) % 2 === 1);
+
+  for (let y = 0; y < 16; y++) {
+    for (let x = 0; x < 16; x++) {
+      const i = y * 16 + x;
+      const led = document.getElementById('led-' + i);
+      if (!led) continue;
+      if (blackout || strobe) { led.style.background = '#060608'; continue; }
+
+      // aurora base
+      const v = (Math.sin(x*0.4+simT*0.3) * Math.sin(y*0.3+simT*0.2)) * 0.18;
+      if (v > 0) {
+        const h = (simT*0.04 + x/16*0.15 + y/16*0.1 + hueShift) % 1;
+        const [r,g,b] = hsvToRgb(h, sat*0.8, Math.min(1,v*bri*6));
+        // plasma overlay
+        const pv = (Math.sin(x*0.5+simT)*Math.sin(y*0.5+simT*0.8)) * 0.5 + 0.5;
+        const ph = (h + pv*0.2) % 1;
+        const [pr,pg,pb] = hsvToRgb(ph, sat, pv*bri*0.4);
+        const fr = Math.min(255, r+pr), fg = Math.min(255, g+pg), fb = Math.min(255, b+pb);
+        led.style.background = `rgb(${fr},${fg},${fb})`;
+        led.style.boxShadow   = blur > 0.2 ? `0 0 ${blur*6}px rgb(${fr},${fg},${fb})` : '';
+      } else {
+        // faint shimmer in dark areas
+        const shimmer = Math.max(0, -v) * 0.05 * bri;
+        const sv = Math.round(shimmer * 255);
+        led.style.background = `rgb(${sv},${sv},${sv})`;
+        led.style.boxShadow  = '';
+      }
+    }
+  }
+}
+
+/* ── init ───────────────────────────────────────────────────────────────── */
+async function init() {
+  const c = await api('/api/config');
+  if (c) applyConfigToUI(c);
+  else toast('Could not load config', true);
+  pollStatus();
+  log('Control UI ready', 'sys');
+}
+
+init();
+setInterval(pollStatus, 5000);
+setInterval(renderSim, 200);
+</script>
+</body>
+</html>

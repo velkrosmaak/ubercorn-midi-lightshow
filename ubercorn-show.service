@@ -1,0 +1,14 @@
+[Unit]
+Description=Ubercorn MIDI Light Show
+After=network.target
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/home/pi/ubercorn
+ExecStart=/usr/bin/python3 /home/pi/ubercorn/ubercorn-midi-show.py
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

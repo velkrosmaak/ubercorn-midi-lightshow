@@ -1,0 +1,14 @@
+[Unit]
+Description=Ubercorn MIDI Light Show – Web Control UI
+After=network.target ubercorn-show.service
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/home/pi/ubercorn
+ExecStart=/usr/bin/python3 /home/pi/ubercorn/webapp.py --port 8080
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
