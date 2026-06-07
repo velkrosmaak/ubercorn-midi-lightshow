@@ -63,9 +63,11 @@ state = State()
 _last_cfg_mtime = [0.0]
 
 def reload_config():
+    """Pull latest values from JSON config into state."""
     try:
-        # existence check FIRST, before getmtime
+        # existence check FIRST – getmtime raises FileNotFoundError if missing
         if not os.path.exists(cfg_module.CONFIG_PATH):
+            print(f"[CONFIG] Config not found at {cfg_module.CONFIG_PATH} – creating defaults")
             cfg_module.save(cfg_module.DEFAULTS.copy())
             return
 
@@ -88,10 +90,16 @@ def reload_config():
         state.attract_mode     = bool(c.get("attract_mode", True))
         state.attract_interval = float(c.get("attract_interval", 4.0))
         state.max_layers       = int(c.get("max_layers", 12))
+        if HAT_AVAILABLE:
+            hat.rotation(state.rotation)
+        print(f"[CONFIG] Reloaded: brightness={state.brightness:.2f} fps={state.fps} speed={state.speed:.1f}")
 
+        # check restart flag
         if c.get("restart", False):
             cfg_module.update({"restart": False})
             print("[CONFIG] Restart requested – re-execing...")
+            if HAT_AVAILABLE:
+                hat.off()
             os.execv(sys.executable, [sys.executable] + sys.argv)
     except Exception as e:
         print(f"[CONFIG] reload error: {e}")
@@ -411,17 +419,21 @@ def spawn_layer(note: int, velocity: int):
             if l.note == note:
                 l.decay = 0.04
         lo, hi = pick_palette(velocity)
+        effect = assign_effect(velocity, note)
         layer = Layer(
             note      = note,
             velocity  = velocity,
             hue       = random.uniform(lo, hi),
             decay     = lerp(0.005, 0.025, velocity/127.0),
-            effect_fn = assign_effect(velocity, note),
+            effect_fn = effect,
             born      = state.time,
         )
         layers.append(layer)
         if len(layers) > state.max_layers:
             layers.pop(0)
+        print(f"[SHOW] Spawn layer  note={note} ({note_name(note)})  "
+              f"vel={velocity}  effect={effect.__name__}  "
+              f"total_layers={len(layers)}")
 
 def release_layer(note: int):
     with layer_lock:
@@ -449,59 +461,81 @@ def update_layers():
 
 last_midi_time = [time.time()]
 
+# MIDI note number → name helper
+_NOTE_NAMES = ['C','C#','D','D#','E','F','F#','G','G#','A','A#','B']
+def note_name(n: int) -> str:
+    return f"{_NOTE_NAMES[n % 12]}{(n // 12) - 1}"
+
+# CC number → friendly name
+_CC_NAMES = {
+    1:'Brightness', 7:'Speed', 10:'Hue Shift', 16:'Strobe Rate',
+    17:'Particles', 18:'Saturation', 64:'Sustain', 74:'Blur', 121:'Reset All',
+}
+
 def handle_midi_message(msg_bytes: bytes):
     last_midi_time[0] = time.time()
     if len(msg_bytes) < 2:
+        print(f"[MIDI] Short message ({len(msg_bytes)} bytes) – ignored")
         return
-    status = msg_bytes[0] & 0xF0
-    data1  = msg_bytes[1] if len(msg_bytes) > 1 else 0
-    data2  = msg_bytes[2] if len(msg_bytes) > 2 else 0
+    status  = msg_bytes[0] & 0xF0
+    channel = (msg_bytes[0] & 0x0F) + 1
+    data1   = msg_bytes[1] if len(msg_bytes) > 1 else 0
+    data2   = msg_bytes[2] if len(msg_bytes) > 2 else 0
 
     if status == MIDI_NOTE_ON and data2 > 0:
+        print(f"[MIDI] NOTE ON   ch={channel:2d}  note={data1:3d} ({note_name(data1):4s})  vel={data2:3d}")
         spawn_layer(data1, data2)
+
     elif status == MIDI_NOTE_OFF or (status == MIDI_NOTE_ON and data2 == 0):
+        print(f"[MIDI] NOTE OFF  ch={channel:2d}  note={data1:3d} ({note_name(data1):4s})")
         release_layer(data1)
+
     elif status == MIDI_CC:
         cc, val = data1, data2
-        if   cc == 1:   state.brightness  = 0.1 + 0.9*(val/127)
-        elif cc == 7:   state.speed       = 0.2 + 3.8*(val/127)
-        elif cc == 10:  state.hue_shift   = val/127*360
-        elif cc == 16:  state.strobe_rate = val/127*30
-        elif cc == 17:  state.particle_den = val
-        elif cc == 18:  state.saturation  = val/127
-        elif cc == 64:  state.sustain     = (val >= 64)
-        elif cc == 74:  state.blur        = val/127
+        cc_name = _CC_NAMES.get(cc, f"CC{cc}")
+        print(f"[MIDI] CC        ch={channel:2d}  cc={cc:3d} ({cc_name:<16s})  val={val:3d}", end="")
+
+        if   cc == 1:
+            state.brightness  = 0.1 + 0.9*(val/127)
+            print(f"  → brightness={state.brightness:.2f}")
+        elif cc == 7:
+            state.speed       = 0.2 + 3.8*(val/127)
+            print(f"  → speed={state.speed:.2f}×")
+        elif cc == 10:
+            state.hue_shift   = val/127*360
+            print(f"  → hue_shift={state.hue_shift:.1f}°")
+        elif cc == 16:
+            state.strobe_rate = val/127*30
+            print(f"  → strobe={state.strobe_rate:.1f} Hz")
+        elif cc == 17:
+            state.particle_den = val
+            print(f"  → particles={val}")
+        elif cc == 18:
+            state.saturation  = val/127
+            print(f"  → saturation={state.saturation:.2f}")
+        elif cc == 64:
+            state.sustain     = (val >= 64)
+            print(f"  → sustain={'ON' if state.sustain else 'OFF'}")
+        elif cc == 74:
+            state.blur        = val/127
+            print(f"  → blur={state.blur:.2f}")
         elif cc == 121:
             state.brightness=0.8; state.speed=1.0; state.hue_shift=0.0
             state.strobe_rate=0.0; state.saturation=1.0
             state.sustain=False; state.blur=0.0
+            print(f"  → ALL RESET")
+        else:
+            print(f"  → (unmapped)")
+
+    elif status == MIDI_PITCHBEND:
+        bend = ((data2 << 7) | data1) - 8192
+        print(f"[MIDI] PITCHBEND ch={channel:2d}  bend={bend:+6d}")
+
+    else:
+        print(f"[MIDI] UNKNOWN   status=0x{msg_bytes[0]:02X} data={msg_bytes[1:].hex()}")
 
 def is_rtpmidi(data):
     return len(data) >= 12 and ((data[0] >> 6) & 0x3) == 2
-
-def handle_rtp_control(sock, data, addr):
-    """Handle AppleMIDI/RTP MIDI session control packets (Invitation/Sync)."""
-    if len(data) < 8:
-        return
-    
-    signature = data[:2]
-    command = data[2:4]
-    
-    if signature == b'\xff\xff':
-        if command == b'IN': # Invitation (IN)
-            # Respond with OK: FFFF OK [Version:4] [Token:4] [Name:str\0]
-            token = data[8:12]
-            response = b'\xff\xffOK\x00\x00\x00\x02' + token + b'Ubercorn Lightshow\x00'
-            sock.sendto(response, addr)
-            print(f"[MIDI] Accepted RTP MIDI session from {addr}")
-        elif command == b'CK': # Synchronization (CK)
-            # Respond with CK: FFFF CK [Source:4] [Count:1] [Padding:3] [T1:8] [T2:8] [T3:8]
-            source = data[4:8]
-            count = data[8]
-            t1 = data[12:20]
-            # Simplified sync: Echo T1 back as T1/T2/T3 to keep connection alive
-            response = b'\xff\xffCK' + source + bytes([(count + 1) & 0xFF]) + b'\x00\x00\x00' + t1 + t1 + t1
-            sock.sendto(response, addr)
 
 def parse_rtpmidi(data):
     if len(data) < 13:
@@ -521,17 +555,15 @@ def midi_server_thread():
     except OSError as e:
         print(f"[MIDI] Bind failed: {e}")
         return
-    sock.settimeout(1.0)
+    sock.settimeout(2.0)
     while True:
         try:
             data, addr = sock.recvfrom(UDP_BUFSIZE)
-            
-            # Check for AppleMIDI Control (Handshake/Sync)
-            if data.startswith(b'\xff\xff'):
-                handle_rtp_control(sock, data, addr)
-                continue
-
-            midi_bytes = parse_rtpmidi(data) if is_rtpmidi(data) else data
+            rtp = is_rtpmidi(data)
+            midi_bytes = parse_rtpmidi(data) if rtp else data
+            print(f"[UDP]  Packet from {addr[0]}:{addr[1]}  "
+                  f"{len(data)}B  {'RTP-MIDI' if rtp else 'raw'}  "
+                  f"midi={midi_bytes.hex(' ')}")
             i = 0
             while i < len(midi_bytes):
                 b = midi_bytes[i]
