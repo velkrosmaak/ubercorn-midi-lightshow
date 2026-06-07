@@ -479,6 +479,30 @@ def handle_midi_message(msg_bytes: bytes):
 def is_rtpmidi(data):
     return len(data) >= 12 and ((data[0] >> 6) & 0x3) == 2
 
+def handle_rtp_control(sock, data, addr):
+    """Handle AppleMIDI/RTP MIDI session control packets (Invitation/Sync)."""
+    if len(data) < 8:
+        return
+    
+    signature = data[:2]
+    command = data[2:4]
+    
+    if signature == b'\xff\xff':
+        if command == b'IN': # Invitation (IN)
+            # Respond with OK: FFFF OK [Version:4] [Token:4] [Name:str\0]
+            token = data[8:12]
+            response = b'\xff\xffOK\x00\x00\x00\x02' + token + b'Ubercorn Lightshow\x00'
+            sock.sendto(response, addr)
+            print(f"[MIDI] Accepted RTP MIDI session from {addr}")
+        elif command == b'CK': # Synchronization (CK)
+            # Respond with CK: FFFF CK [Source:4] [Count:1] [Padding:3] [T1:8] [T2:8] [T3:8]
+            source = data[4:8]
+            count = data[8]
+            t1 = data[12:20]
+            # Simplified sync: Echo T1 back as T1/T2/T3 to keep connection alive
+            response = b'\xff\xffCK' + source + bytes([(count + 1) & 0xFF]) + b'\x00\x00\x00' + t1 + t1 + t1
+            sock.sendto(response, addr)
+
 def parse_rtpmidi(data):
     if len(data) < 13:
         return b''
@@ -497,10 +521,16 @@ def midi_server_thread():
     except OSError as e:
         print(f"[MIDI] Bind failed: {e}")
         return
-    sock.settimeout(2.0)
+    sock.settimeout(1.0)
     while True:
         try:
-            data, _ = sock.recvfrom(UDP_BUFSIZE)
+            data, addr = sock.recvfrom(UDP_BUFSIZE)
+            
+            # Check for AppleMIDI Control (Handshake/Sync)
+            if data.startswith(b'\xff\xff'):
+                handle_rtp_control(sock, data, addr)
+                continue
+
             midi_bytes = parse_rtpmidi(data) if is_rtpmidi(data) else data
             i = 0
             while i < len(midi_bytes):

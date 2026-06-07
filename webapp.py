@@ -27,7 +27,6 @@ from flask import Flask, jsonify, request, send_from_directory
 sys.path.insert(0, os.path.dirname(__file__))
 import config as cfg_module
 
-app = Flask(__name__, static_folder="static")
 STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
 app = Flask(__name__, static_folder=STATIC_DIR)
 
