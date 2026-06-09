@@ -17,17 +17,16 @@ import colorsys
 import math
 import os
 import random
-import signal
-import socket
 import sys
 import threading
 import time
 from dataclasses import dataclass, field
 from typing import List, Tuple
 
-# ── local config module ────────────────────────────────────────────────────────
-sys.path.insert(0, os.path.dirname(__file__))
+# ── local modules ─────────────────────────────────────────────────────────────
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import config as cfg_module
+from rtpmidi_session import RTPMidiServer
 
 # ── optional hardware import ───────────────────────────────────────────────────
 try:
@@ -109,7 +108,6 @@ MIDI_NOTE_OFF  = 0x80
 MIDI_NOTE_ON   = 0x90
 MIDI_CC        = 0xB0
 MIDI_PITCHBEND = 0xE0
-UDP_BUFSIZE    = 1024
 
 PALETTE_BANKS = [
     (0.0,  0.08),
@@ -534,52 +532,18 @@ def handle_midi_message(msg_bytes: bytes):
     else:
         print(f"[MIDI] UNKNOWN   status=0x{msg_bytes[0]:02X} data={msg_bytes[1:].hex()}")
 
-def is_rtpmidi(data):
-    return len(data) >= 12 and ((data[0] >> 6) & 0x3) == 2
+# ── RTP-MIDI server ────────────────────────────────────────────────────────────
+# Instantiated in main() once config is loaded.
+_rtp_server: RTPMidiServer = None
 
-def parse_rtpmidi(data):
-    if len(data) < 13:
-        return b''
-    payload = data[12:]
-    if not payload:
-        return b''
-    long_hdr = (payload[0] & 0x80) != 0
-    return payload[2:] if long_hdr and len(payload) >= 2 else payload[1:]
-
-def midi_server_thread():
-    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    try:
-        sock.bind((state.midi_host, state.midi_port))
-        print(f"[MIDI] Listening on UDP {state.midi_host}:{state.midi_port}")
-    except OSError as e:
-        print(f"[MIDI] Bind failed: {e}")
-        return
-    sock.settimeout(2.0)
-    while True:
-        try:
-            data, addr = sock.recvfrom(UDP_BUFSIZE)
-            rtp = is_rtpmidi(data)
-            midi_bytes = parse_rtpmidi(data) if rtp else data
-            print(f"[UDP]  Packet from {addr[0]}:{addr[1]}  "
-                  f"{len(data)}B  {'RTP-MIDI' if rtp else 'raw'}  "
-                  f"midi={midi_bytes.hex(' ')}")
-            i = 0
-            while i < len(midi_bytes):
-                b = midi_bytes[i]
-                if b & 0x80:
-                    status = b & 0xF0
-                    if status in (MIDI_NOTE_ON, MIDI_NOTE_OFF, MIDI_CC, MIDI_PITCHBEND):
-                        handle_midi_message(midi_bytes[i:i+3])
-                        i += 3
-                    else:
-                        i += 1
-                else:
-                    i += 1
-        except socket.timeout:
-            continue
-        except Exception as e:
-            print(f"[MIDI] Error: {e}")
+def start_rtp_server():
+    global _rtp_server
+    _rtp_server = RTPMidiServer(
+        name          = "Ubercorn",
+        port          = state.midi_port,
+        midi_callback = handle_midi_message,
+    )
+    _rtp_server.start()
 
 # ── attract mode ───────────────────────────────────────────────────────────────
 
@@ -648,11 +612,17 @@ def main():
 
     print("╔══════════════════════════════════════════╗")
     print("║  Ubercorn MIDI Light Show                ║")
-    print(f"║  Grid: {WIDTH}×{HEIGHT}  FPS: {state.fps}  Port: {state.midi_port}        ║")
+    print(f"║  Grid: {WIDTH}×{HEIGHT}  FPS: {state.fps}  Port: {state.midi_port}/{state.midi_port+1}    ║")
+    print("╠══════════════════════════════════════════╣")
+    print("║  Apple MIDI / RTP-MIDI mode              ║")
+    print("║  Add device in macOS Audio MIDI Setup    ║")
+    print("║  Network → + → enter Pi IP               ║")
     print("╚══════════════════════════════════════════╝")
 
+    # start Apple MIDI / RTP-MIDI server (replaces raw UDP thread)
+    start_rtp_server()
+
     threads = [
-        threading.Thread(target=midi_server_thread,  daemon=True),
         threading.Thread(target=attract_mode_thread, daemon=True),
     ]
     for t in threads:
@@ -662,6 +632,8 @@ def main():
         display_loop()   # blocking – runs on main thread for HAT safety
     except KeyboardInterrupt:
         print("\n[EXIT] Shutting down.")
+        if _rtp_server:
+            _rtp_server.stop()
         if HAT_AVAILABLE:
             hat.off()
 
