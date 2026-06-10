@@ -230,17 +230,6 @@ def init_channel_map():
     for ch in range(16):
         CHANNEL_EFFECTS[ch] = random.randint(0, len(_EFFECTS) - 1)
 
-_EFFECTS = [
-    _effect_flash,
-    _effect_radial,
-    _effect_sweep,
-    _effect_plasma,
-    _effect_columns,
-    _effect_strobe,
-    _effect_diamond,
-    _effect_spiral,
-]
-
 # ── background – simple hue-cycling gradient ───────────────────────────────────
 _bg_t = [0.0]
 
