@@ -73,6 +73,7 @@ class State:
     time           = 0.0
 
 state = State()
+_last_update_t = time.time()
 _last_cfg_mtime = [0.0]
 
 def reload_config():
@@ -110,28 +111,47 @@ def reload_config():
         print(f"[CONFIG] error: {e}")
 
 # ── fast vectorised HSV→RGB ────────────────────────────────────────────────────
-def hsv_to_rgb_array(h: np.ndarray, s: float, v: np.ndarray) -> np.ndarray:
+def hsv_to_rgb_array(h, s, v, out=None) -> np.ndarray:
     """
-    h : (H,W) float32 hue array 0..1
-    s : scalar saturation 0..1
-    v : (H,W) float32 value/brightness array 0..1
-    Returns (H,W,3) float32 in 0..255
-    Operates entirely in numpy – no Python loops.
+    Optimised HSV to RGB conversion.
+    h: scalar or (H,W) array, s: scalar, v: (H,W) array.
     """
-    h = (h + state.hue_shift / 360.0) % 1.0
-    s = float(np.clip(s * state.saturation, 0.0, 1.0))
+    h_shift = (h + state.hue_shift / 360.0) % 1.0
+    s_val = float(np.clip(s * state.saturation, 0.0, 1.0))
+    
+    if out is None:
+        out = np.empty(v.shape + (3,), dtype=np.float32)
 
-    i  = (h * 6.0).astype(np.int32)
-    f  = h * 6.0 - i
-    p  = v * (1.0 - s)
-    q  = v * (1.0 - f * s)
-    t  = v * (1.0 - (1.0 - f) * s)
-    i6 = i % 6
-
-    r = np.select([i6==0,i6==1,i6==2,i6==3,i6==4,i6==5], [v,q,p,p,t,v], default=v)
-    g = np.select([i6==0,i6==1,i6==2,i6==3,i6==4,i6==5], [t,v,v,q,p,p], default=t)
-    b = np.select([i6==0,i6==1,i6==2,i6==3,i6==4,i6==5], [p,p,t,v,v,q], default=p)
-    return np.stack([r, g, b], axis=-1) * 255.0
+    if np.isscalar(h_shift):
+        # Fast path for uniform hue - calculate RGB scalar once
+        i = int(h_shift * 6.0)
+        f = h_shift * 6.0 - i
+        p, q, t = (1.0 - s_val), (1.0 - f * s_val), (1.0 - (1.0 - f) * s_val)
+        i %= 6
+        rgb = [(1.0, t, p), (q, 1.0, p), (p, 1.0, t), (p, q, 1.0), (t, p, 1.0), (1.0, p, q)][i]
+        
+        out[..., 0] = v * (rgb[0] * 255.0)
+        out[..., 1] = v * (rgb[1] * 255.0)
+        out[..., 2] = v * (rgb[2] * 255.0)
+    else:
+        # Vectorised path for varying hue
+        i = (h_shift * 6.0).astype(np.int32)
+        f = h_shift * 6.0 - i
+        v255 = v * 255.0
+        p, q, t = v255 * (1.0 - s_val), v255 * (1.0 - f * s_val), v255 * (1.0 - (1.0 - f) * s_val)
+        i %= 6
+        
+        # Boolean indexing is faster than np.select for 16x16
+        for val in range(6):
+            m = (i == val)
+            if val == 0: out[m] = np.stack([v255[m], t[m], p[m]], axis=-1)
+            elif val == 1: out[m] = np.stack([q[m], v255[m], p[m]], axis=-1)
+            elif val == 2: out[m] = np.stack([p[m], v255[m], t[m]], axis=-1)
+            elif val == 3: out[m] = np.stack([p[m], q[m], v255[m]], axis=-1)
+            elif val == 4: out[m] = np.stack([t[m], p[m], v255[m]], axis=-1)
+            elif val == 5: out[m] = np.stack([v255[m], p[m], q[m]], axis=-1)
+            
+    return out
 
 # ── layer ──────────────────────────────────────────────────────────────────────
 @dataclass
@@ -201,30 +221,16 @@ def _effect_plasma(L: Layer):
     return _LAYER
 
 def _effect_columns(L: Layer):
-    """Rising columns – vectorised over columns."""
-    _LAYER[:] = 0
-    col_heights = ((0.5 + 0.5 * np.sin(L.phase * 5 + np.arange(WIDTH, dtype=np.float32) * 0.7))
-                   * HEIGHT).astype(np.int32)
-    hues = (L.hue + np.arange(WIDTH, dtype=np.float32) / WIDTH * 0.25) % 1.0
-    v = L.vel * L.alpha
-    for x in range(WIDTH):
-        ch = int(col_heights[x])
-        if ch <= 0:
-            continue
-        ys = np.arange(ch)
-        brights = np.clip((1.0 - ys / HEIGHT * 0.6) * v, 0, 1)
-        h_col = np.full(ch, hues[x], dtype=np.float32)
-        v_col = brights.astype(np.float32)
-        i  = (h_col * 6).astype(np.int32)
-        f  = h_col * 6 - i
-        s  = float(np.clip(state.saturation, 0, 1))
-        p  = v_col * (1 - s); q = v_col * (1 - f*s); tv = v_col * (1-(1-f)*s)
-        i6 = i % 6
-        r = np.select([i6==0,i6==1,i6==2,i6==3,i6==4,i6==5],[v_col,q,p,p,tv,v_col])
-        g = np.select([i6==0,i6==1,i6==2,i6==3,i6==4,i6==5],[tv,v_col,v_col,q,p,p])
-        b = np.select([i6==0,i6==1,i6==2,i6==3,i6==4,i6==5],[p,p,tv,v_col,v_col,q])
-        _LAYER[HEIGHT - 1 - ys, x] = np.stack([r,g,b], axis=-1) * 255.0
-    return _LAYER
+    """Rising columns – fully vectorised."""
+    x_idxs = np.arange(WIDTH, dtype=np.float32)
+    heights = ((0.5 + 0.5 * np.sin(L.phase * 5 + x_idxs * 0.7)) * HEIGHT).astype(np.int32)
+    hues = (L.hue + x_idxs / WIDTH * 0.25) % 1.0
+    y_idxs = (HEIGHT - 1 - np.arange(HEIGHT)).reshape(-1, 1)
+    mask = y_idxs < heights
+    v_grad = (1.0 - np.arange(HEIGHT).reshape(-1, 1) / HEIGHT * 0.6)
+    v_arr = mask * v_grad * (L.vel * L.alpha)
+    h_arr = np.broadcast_to(hues, (HEIGHT, WIDTH))
+    return hsv_to_rgb_array(h_arr, 1.0, v_arr, out=_LAYER)
 
 def _effect_strobe(L: Layer):
     """Hard strobe flash."""
@@ -308,6 +314,8 @@ def composite() -> np.ndarray:
         active = [l for l in layers if l.alive]
 
     for layer in active:
+        if layer.alpha < 0.005:
+            continue
         layer_frame = _EFFECTS[layer.effect_id](layer)
         np.add(_BUF, layer_frame, out=_BUF)
 
@@ -363,16 +371,20 @@ def release_layer(note: int):
                 l.decay = 0.025
 
 def update_layers():
-    dt = (1.0 / max(state.fps, 1)) * state.speed
+    global _last_update_t
+    now = time.time()
+    dt_real = now - _last_update_t
+    _last_update_t = now
+    dt = dt_real * state.speed
     with layer_lock:
         for l in layers:
             if not l.alive:
                 continue
             l.phase += dt
             if state.sustain:
-                l.alpha = min(l.alpha + 0.008, 1.0)
+                l.alpha = min(l.alpha + 0.2 * dt_real, 1.0)
             else:
-                l.alpha -= l.decay
+                l.alpha -= l.decay * (dt_real * 30.0)
             if l.alpha <= 0:
                 l.alive = False
         layers[:] = [l for l in layers if l.alive or l.phase < 0.3]
@@ -455,8 +467,11 @@ def display_loop():
     fps_t0     = time.time()
 
     while True:
-        t0 = time.time()
-        state.time += 1.0 / max(state.fps, 1)
+        t_start = time.time()
+        # calculate dt for this specific frame
+        reload_dt = t_start - (state.time_last if hasattr(state, 'time_last') else t_start)
+        state.time += reload_dt
+        state.time_last = t_start
 
         # config reload every 60 frames (~2 s at 30 fps)
         cfg_tick += 1
@@ -505,7 +520,7 @@ def display_loop():
             fps_frames = 0
             fps_t0     = now
 
-        elapsed = time.time() - t0
+        elapsed = time.time() - t_start
         sleep_t = max(0.0, 1.0 / max(state.fps, 1) - elapsed)
         time.sleep(sleep_t)
 
