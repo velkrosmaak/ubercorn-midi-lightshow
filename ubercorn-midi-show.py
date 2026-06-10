@@ -191,7 +191,7 @@ def _effect_flash(L: Layer):
 def _effect_radial(L: Layer):
     """Expanding ring using pre-computed _DIST."""
     radius    = L.phase * 1.4          # _DIST is normalised 0..~1.4
-    thickness = 0.18 + 0.08 * np.sin(L.phase * 4)
+    thickness = 0.2
     dist      = np.abs(_DIST - radius)
     np.clip((1.0 - dist / max(thickness, 0.01)) * L.alpha * L.vel, 0, 1, out=_V_ARR)
     np.copyto(_H_ARR, L.hue)
@@ -210,10 +210,8 @@ def _effect_sweep(L: Layer):
 
 def _effect_plasma(L: Layer):
     """Sine-wave interference – fast because sin is vectorised."""
-    t = L.phase * 3.0
-    val = (np.sin(_X * 0.5 + t) +
-           np.sin(_Y * 0.5 + t * 1.2) +
-           np.sin((_X + _Y) * 0.3 + t * 0.7)) / 3.0
+    t = L.phase * 4.0
+    val = np.sin(_X * 0.6 + t)
     np.clip((0.5 + 0.5 * val) * L.alpha * L.vel, 0, 1, out=_V_ARR)
     np.add(L.hue, val * 0.15, out=_H_ARR)
     np.mod(_H_ARR, 1.0, out=_H_ARR)
@@ -257,12 +255,12 @@ def _effect_spiral(L: Layer):
     """Spiral arms using pre-computed _ANGLE and _DIST."""
     t    = L.phase * 4.0
     arms = 3
-    # twist angle per unit radius
-    spiral = (_ANGLE + _DIST * 2.0 - t) % (2 * np.pi / arms)
+    # simplified rotation, removed distance twist
+    spiral = (_ANGLE - t) % (2 * np.pi / arms)
     dist   = np.minimum(spiral, 2 * np.pi / arms - spiral).astype(np.float32)
     fade   = np.clip(1.0 - _DIST / 1.5, 0, 1).astype(np.float32)
     np.clip((1.0 - dist / 0.35) * fade * L.alpha * L.vel, 0, 1, out=_V_ARR)
-    np.add(L.hue, _DIST * 0.15, out=_H_ARR)
+    np.copyto(_H_ARR, L.hue)
     np.mod(_H_ARR, 1.0, out=_H_ARR)
     np.copyto(_LAYER, hsv_to_rgb_array(_H_ARR, 1.0, _V_ARR))
     return _LAYER
@@ -355,7 +353,7 @@ def spawn_layer(note: int, velocity: int):
             note      = note,
             velocity  = velocity,
             hue       = random.uniform(lo, hi),
-            decay     = 0.004 + 0.018 * (velocity / 127.0),
+            decay     = 0.012 + 0.025 * (velocity / 127.0),
             effect_id = eid,
         )
         layers.append(layer)
@@ -368,7 +366,7 @@ def release_layer(note: int):
     with layer_lock:
         for l in layers:
             if l.note == note and l.alive and not state.sustain:
-                l.decay = 0.025
+                l.decay = 0.075
 
 def update_layers():
     global _last_update_t
