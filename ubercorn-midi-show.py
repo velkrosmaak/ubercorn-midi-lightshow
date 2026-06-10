@@ -33,19 +33,6 @@ except ImportError:
     WIDTH, HEIGHT = 16, 16
     print("[WARN] unicornhathd not found – sim mode")
 
-# ── coordinate grids – computed ONCE at startup ────────────────────────────────
-# All float32, shape (HEIGHT, WIDTH)
-_Y, _X   = np.mgrid[0:HEIGHT, 0:WIDTH].astype(np.float32)
-_CX, _CY = WIDTH / 2.0 - 0.5, HEIGHT / 2.0 - 0.5
-_DX      = (_X - _CX) / (WIDTH  / 2.0)   # normalised –1..1
-_DY      = (_Y - _CY) / (HEIGHT / 2.0)
-_DIAG    = (_X + _Y).astype(np.float32)   # 0 .. W+H-2
-_DIST_SQ = (_DX**2 + _DY**2).astype(np.float32)   # 0..~2  (no sqrt needed)
-_DIST    = np.sqrt(_DIST_SQ).astype(np.float32)    # used only in effects that need it
-_ANGLE   = np.arctan2(_DY, _DX).astype(np.float32) # –π..π  (computed once)
-_XNORM   = (_X / (WIDTH  - 1)).astype(np.float32)  # 0..1
-_YNORM   = (_Y / (HEIGHT - 1)).astype(np.float32)
-
 # reusable per-frame buffers (avoids allocation every frame)
 _BUF     = np.zeros((HEIGHT, WIDTH, 3), dtype=np.float32)
 _LAYER   = np.zeros((HEIGHT, WIDTH, 3), dtype=np.float32)
@@ -67,7 +54,7 @@ class State:
     blackout       = False
     attract_mode   = True
     attract_interval = 4.0
-    max_layers     = 6
+    max_layers     = 4
     midi_host      = "0.0.0.0"
     midi_port      = 5004
     time           = 0.0
@@ -101,7 +88,7 @@ def reload_config():
         state.blackout         = bool( c.get("blackout",         False))
         state.attract_mode     = bool( c.get("attract_mode",     True))
         state.attract_interval = float(c.get("attract_interval",  4.0))
-        state.max_layers       = int(  c.get("max_layers",         6))
+        state.max_layers       = int(  c.get("max_layers",         4))
         if HAT_AVAILABLE:
             hat.rotation(state.rotation)
         if c.get("restart", False):
@@ -155,7 +142,7 @@ def hsv_to_rgb_array(h, s, v, out=None) -> np.ndarray:
     return out
 
 # ── layer ──────────────────────────────────────────────────────────────────────
-@dataclass
+@dataclass 
 class Layer:
     note:      int
     velocity:  int
@@ -165,6 +152,8 @@ class Layer:
     alive:     bool   = True
     effect_id: int    = 0
     phase:     float  = 0.0
+    cx:        int    = 0
+    cy:        int    = 0
 
     @property
     def vel(self) -> float:
@@ -174,54 +163,47 @@ layers: List[Layer] = []
 layer_lock = threading.Lock()
 
 # ── effects ────────────────────────────────────────────────────────────────────
-# Each writes into the pre-allocated _LAYER buffer and returns it.
-# NO allocations, NO Python pixel loops, NO expensive trig per frame
-# (arctan/sqrt are pre-computed at startup in _DIST / _ANGLE).
 
-def _effect_flash(L: Layer):
-    """Solid color fill."""
-    _V_ARR[:] = L.vel * L.alpha
-    return hsv_to_rgb_array(L.hue, 1.0, _V_ARR, out=_LAYER)
+def _get_rgb(L: Layer):
+    """Calculate a single RGB scalar for the whole layer."""
+    return hsv_to_rgb_array(L.hue, 1.0, L.vel * L.alpha)[0,0]
 
-def _effect_radial(L: Layer):
-    """Expanding circular ring."""
-    radius = L.phase * 1.8
-    v = np.clip(1.0 - np.abs(_DIST - radius) / 0.15, 0, 1) * (L.vel * L.alpha)
-    return hsv_to_rgb_array(L.hue, 1.0, v, out=_LAYER)
+def _effect_dot(L: Layer):
+    _LAYER[:] = 0
+    _LAYER[L.cy, L.cx] = _get_rgb(L)
+    return _LAYER
 
-def _effect_h_bar(L: Layer):
-    """Horizontal sweeping line."""
-    pos = (L.phase * 0.8) % 1.0
-    v = np.clip(1.0 - np.abs(_YNORM - pos) / 0.12, 0, 1) * (L.vel * L.alpha)
-    return hsv_to_rgb_array(L.hue, 1.0, v, out=_LAYER)
+def _effect_v_line(L: Layer):
+    _LAYER[:] = 0
+    _LAYER[:, L.cx] = _get_rgb(L)
+    return _LAYER
 
-def _effect_v_bar(L: Layer):
-    """Vertical sweeping line."""
-    pos = (L.phase * 0.8) % 1.0
-    v = np.clip(1.0 - np.abs(_XNORM - pos) / 0.12, 0, 1) * (L.vel * L.alpha)
-    return hsv_to_rgb_array(L.hue, 1.0, v, out=_LAYER)
+def _effect_h_line(L: Layer):
+    _LAYER[:] = 0
+    _LAYER[L.cy, :] = _get_rgb(L)
+    return _LAYER
 
 def _effect_square(L: Layer):
-    """Expanding square ring."""
-    size = L.phase * 1.5
-    sq_dist = np.maximum(np.abs(_DX), np.abs(_DY))
-    v = np.clip(1.0 - np.abs(sq_dist - size) / 0.15, 0, 1) * (L.vel * L.alpha)
-    return hsv_to_rgb_array(L.hue, 1.0, v, out=_LAYER)
+    _LAYER[:] = 0
+    rgb = _get_rgb(L)
+    y1, y2 = max(0, L.cy-1), min(HEIGHT, L.cy+2)
+    x1, x2 = max(0, L.cx-1), min(WIDTH, L.cx+2)
+    _LAYER[y1:y2, x1:x2] = rgb
+    return _LAYER
 
-def _effect_box_grow(L: Layer):
-    """Bottom-up rectangle growth."""
-    h = min(L.phase * 2.5, 1.0) * HEIGHT
-    y_idxs = (HEIGHT - 1 - np.arange(HEIGHT)).reshape(-1, 1)
-    v_arr = (y_idxs < h) * (L.vel * L.alpha)
-    return hsv_to_rgb_array(L.hue, 1.0, v_arr, out=_LAYER)
+def _effect_cross(L: Layer):
+    _LAYER[:] = 0
+    rgb = _get_rgb(L)
+    _LAYER[L.cy, :] = rgb
+    _LAYER[:, L.cx] = rgb
+    return _LAYER
 
 _EFFECTS = [
-    _effect_flash,
-    _effect_radial,
-    _effect_h_bar,
-    _effect_v_bar,
+    _effect_dot,
+    _effect_v_line,
+    _effect_h_line,
     _effect_square,
-    _effect_box_grow,
+    _effect_cross,
 ]
 
 def init_channel_map():
@@ -234,14 +216,10 @@ def init_channel_map():
 _bg_t = [0.0]
 
 def render_background(buf: np.ndarray):
-    """Write a slow drifting gradient directly into buf."""
+    """Static gradient to save CPU."""
     t = _bg_t[0]
-    v = (np.sin(_X * 0.4 + t * 0.25) * np.sin(_Y * 0.35 + t * 0.18)) * 0.10
-    np.clip(v, 0, 1, out=_V_ARR)
-    np.add(t * 0.03 + _XNORM * 0.12 + _YNORM * 0.08, 0, out=_H_ARR)
-    np.mod(_H_ARR, 1.0, out=_H_ARR)
-    np.copyto(buf, hsv_to_rgb_array(_H_ARR, 0.8, _V_ARR))
-    _bg_t[0] += (1.0 / max(state.fps, 1)) * state.speed
+    buf[:] = [10, 0, 20] # Very dim purple wash
+    _bg_t[0] += 0.01
 
 # ── compositing ────────────────────────────────────────────────────────────────
 
@@ -294,12 +272,18 @@ def spawn_layer(note: int, velocity: int, channel: int = 0):
                 l.decay = 0.05          # accelerate existing note
         lo, hi = _pick_palette(velocity)
         eid    = CHANNEL_EFFECTS.get(channel, 0)
+        # Map note to grid position: low notes bottom/left, high notes top/right
+        rel_note = np.clip(note - 36, 0, 72)
+        cx = int(rel_note % WIDTH)
+        cy = int((rel_note // 8) % HEIGHT)
         layer  = Layer(
             note      = note,
             velocity  = velocity,
             hue       = random.uniform(lo, hi),
-            decay     = 0.025 + 0.05 * (velocity / 127.0),
+            decay     = 0.1 + 0.1 * (velocity / 127.0),
             effect_id = eid,
+            cx        = cx,
+            cy        = cy
         )
         layers.append(layer)
         if len(layers) > state.max_layers:
