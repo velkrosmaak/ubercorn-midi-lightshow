@@ -75,6 +75,7 @@ class State:
 state = State()
 _last_update_t = time.time()
 _last_cfg_mtime = [0.0]
+CHANNEL_EFFECTS = {}
 
 def reload_config():
     try:
@@ -177,93 +178,57 @@ layer_lock = threading.Lock()
 # NO allocations, NO Python pixel loops, NO expensive trig per frame
 # (arctan/sqrt are pre-computed at startup in _DIST / _ANGLE).
 
-NUM_EFFECTS = 8
-
 def _effect_flash(L: Layer):
-    """Solid colour fill, fades out – simplest possible effect."""
-    sat = max(0.0, 1.0 - L.alpha * 0.5)
-    np.copyto(_H_ARR, L.hue)
-    np.multiply(L.vel * L.alpha, np.ones((HEIGHT, WIDTH), dtype=np.float32), out=_V_ARR)
-    rgb = hsv_to_rgb_array(_H_ARR, sat, _V_ARR)
-    np.copyto(_LAYER, rgb)
-    return _LAYER
+    """Solid color fill."""
+    _V_ARR[:] = L.vel * L.alpha
+    return hsv_to_rgb_array(L.hue, 1.0, _V_ARR, out=_LAYER)
 
 def _effect_radial(L: Layer):
-    """Expanding ring using pre-computed _DIST."""
-    radius    = L.phase * 1.4          # _DIST is normalised 0..~1.4
-    thickness = 0.2
-    dist      = np.abs(_DIST - radius)
-    np.clip((1.0 - dist / max(thickness, 0.01)) * L.alpha * L.vel, 0, 1, out=_V_ARR)
-    np.copyto(_H_ARR, L.hue)
-    np.copyto(_LAYER, hsv_to_rgb_array(_H_ARR, 1.0, _V_ARR))
-    return _LAYER
+    """Expanding circular ring."""
+    radius = L.phase * 1.8
+    v = np.clip(1.0 - np.abs(_DIST - radius) / 0.15, 0, 1) * (L.vel * L.alpha)
+    return hsv_to_rgb_array(L.hue, 1.0, v, out=_LAYER)
 
-def _effect_sweep(L: Layer):
-    """Diagonal band sweeping across – uses pre-computed _DIAG."""
-    sweep = L.phase * (WIDTH + HEIGHT) * 1.3 - 3.0
-    dist  = np.abs(_DIAG - sweep)
-    np.clip((1.0 - dist / 4.0) * L.alpha * L.vel, 0, 1, out=_V_ARR)
-    np.add(L.hue, dist * 0.02, out=_H_ARR)
-    np.mod(_H_ARR, 1.0, out=_H_ARR)
-    np.copyto(_LAYER, hsv_to_rgb_array(_H_ARR, 1.0, _V_ARR))
-    return _LAYER
+def _effect_h_bar(L: Layer):
+    """Horizontal sweeping line."""
+    pos = (L.phase * 0.8) % 1.0
+    v = np.clip(1.0 - np.abs(_YNORM - pos) / 0.12, 0, 1) * (L.vel * L.alpha)
+    return hsv_to_rgb_array(L.hue, 1.0, v, out=_LAYER)
 
-def _effect_plasma(L: Layer):
-    """Sine-wave interference – fast because sin is vectorised."""
-    t = L.phase * 4.0
-    val = np.sin(_X * 0.6 + t)
-    np.clip((0.5 + 0.5 * val) * L.alpha * L.vel, 0, 1, out=_V_ARR)
-    np.add(L.hue, val * 0.15, out=_H_ARR)
-    np.mod(_H_ARR, 1.0, out=_H_ARR)
-    np.copyto(_LAYER, hsv_to_rgb_array(_H_ARR, 1.0, _V_ARR))
-    return _LAYER
+def _effect_v_bar(L: Layer):
+    """Vertical sweeping line."""
+    pos = (L.phase * 0.8) % 1.0
+    v = np.clip(1.0 - np.abs(_XNORM - pos) / 0.12, 0, 1) * (L.vel * L.alpha)
+    return hsv_to_rgb_array(L.hue, 1.0, v, out=_LAYER)
 
-def _effect_columns(L: Layer):
-    """Rising columns – fully vectorised."""
-    x_idxs = np.arange(WIDTH, dtype=np.float32)
-    heights = ((0.5 + 0.5 * np.sin(L.phase * 5 + x_idxs * 0.7)) * HEIGHT).astype(np.int32)
-    hues = (L.hue + x_idxs / WIDTH * 0.25) % 1.0
+def _effect_square(L: Layer):
+    """Expanding square ring."""
+    size = L.phase * 1.5
+    sq_dist = np.maximum(np.abs(_DX), np.abs(_DY))
+    v = np.clip(1.0 - np.abs(sq_dist - size) / 0.15, 0, 1) * (L.vel * L.alpha)
+    return hsv_to_rgb_array(L.hue, 1.0, v, out=_LAYER)
+
+def _effect_box_grow(L: Layer):
+    """Bottom-up rectangle growth."""
+    h = min(L.phase * 2.5, 1.0) * HEIGHT
     y_idxs = (HEIGHT - 1 - np.arange(HEIGHT)).reshape(-1, 1)
-    mask = y_idxs < heights
-    v_grad = (1.0 - np.arange(HEIGHT).reshape(-1, 1) / HEIGHT * 0.6)
-    v_arr = mask * v_grad * (L.vel * L.alpha)
-    h_arr = np.broadcast_to(hues, (HEIGHT, WIDTH))
-    return hsv_to_rgb_array(h_arr, 1.0, v_arr, out=_LAYER)
+    v_arr = (y_idxs < h) * (L.vel * L.alpha)
+    return hsv_to_rgb_array(L.hue, 1.0, v_arr, out=_LAYER)
 
-def _effect_strobe(L: Layer):
-    """Hard strobe flash."""
-    if int(L.phase * 15) % 2 == 0:
-        _LAYER[:] = 0
-    else:
-        np.copyto(_H_ARR, L.hue)
-        np.multiply(L.vel * L.alpha, np.ones((HEIGHT, WIDTH), dtype=np.float32), out=_V_ARR)
-        np.copyto(_LAYER, hsv_to_rgb_array(_H_ARR, 0.5, _V_ARR))
-    return _LAYER
+_EFFECTS = [
+    _effect_flash,
+    _effect_radial,
+    _effect_h_bar,
+    _effect_v_bar,
+    _effect_square,
+    _effect_box_grow,
+]
 
-def _effect_diamond(L: Layer):
-    """Expanding diamond pulse using Manhattan distance."""
-    manhattan = (np.abs(_DX) + np.abs(_DY)).astype(np.float32)  # 0..~2
-    size  = L.phase * 2.2
-    dist  = np.abs(manhattan - size)
-    np.clip((1.0 - dist / 0.25) * L.alpha * L.vel, 0, 1, out=_V_ARR)
-    np.add(L.hue, dist * 0.05, out=_H_ARR)
-    np.mod(_H_ARR, 1.0, out=_H_ARR)
-    np.copyto(_LAYER, hsv_to_rgb_array(_H_ARR, 1.0, _V_ARR))
-    return _LAYER
-
-def _effect_spiral(L: Layer):
-    """Spiral arms using pre-computed _ANGLE and _DIST."""
-    t    = L.phase * 4.0
-    arms = 3
-    # simplified rotation, removed distance twist
-    spiral = (_ANGLE - t) % (2 * np.pi / arms)
-    dist   = np.minimum(spiral, 2 * np.pi / arms - spiral).astype(np.float32)
-    fade   = np.clip(1.0 - _DIST / 1.5, 0, 1).astype(np.float32)
-    np.clip((1.0 - dist / 0.35) * fade * L.alpha * L.vel, 0, 1, out=_V_ARR)
-    np.copyto(_H_ARR, L.hue)
-    np.mod(_H_ARR, 1.0, out=_H_ARR)
-    np.copyto(_LAYER, hsv_to_rgb_array(_H_ARR, 1.0, _V_ARR))
-    return _LAYER
+def init_channel_map():
+    """Assign a random consistent effect to each of the 16 MIDI channels."""
+    global CHANNEL_EFFECTS
+    for ch in range(16):
+        CHANNEL_EFFECTS[ch] = random.randint(0, len(_EFFECTS) - 1)
 
 _EFFECTS = [
     _effect_flash,
@@ -275,15 +240,6 @@ _EFFECTS = [
     _effect_diamond,
     _effect_spiral,
 ]
-
-def _assign_effect(velocity: int) -> int:
-    if velocity > 110:
-        return random.choice([0, 5])          # flash / strobe
-    if velocity > 85:
-        return random.choice([1, 6, 7])       # radial / diamond / spiral
-    if velocity > 60:
-        return random.choice([2, 3, 4])       # sweep / plasma / columns
-    return random.choice([2, 3, 4])
 
 # ── background – simple hue-cycling gradient ───────────────────────────────────
 _bg_t = [0.0]
@@ -342,18 +298,18 @@ PALETTE_BANKS = [
 def _pick_palette(velocity: int) -> Tuple[float, float]:
     return PALETTE_BANKS[(velocity // 22) % len(PALETTE_BANKS)]
 
-def spawn_layer(note: int, velocity: int):
+def spawn_layer(note: int, velocity: int, channel: int = 0):
     with layer_lock:
         for l in layers:
             if l.note == note:
                 l.decay = 0.05          # accelerate existing note
         lo, hi = _pick_palette(velocity)
-        eid    = _assign_effect(velocity)
+        eid    = CHANNEL_EFFECTS.get(channel, 0)
         layer  = Layer(
             note      = note,
             velocity  = velocity,
             hue       = random.uniform(lo, hi),
-            decay     = 0.012 + 0.025 * (velocity / 127.0),
+            decay     = 0.025 + 0.05 * (velocity / 127.0),
             effect_id = eid,
         )
         layers.append(layer)
@@ -366,7 +322,7 @@ def release_layer(note: int):
     with layer_lock:
         for l in layers:
             if l.note == note and l.alive and not state.sustain:
-                l.decay = 0.075
+                l.decay = 0.15
 
 def update_layers():
     global _last_update_t
@@ -406,18 +362,18 @@ def handle_midi_message(msg: bytes):
     if len(msg) < 2:
         return
     status  = msg[0] & 0xF0
-    channel = (msg[0] & 0x0F) + 1
+    channel = (msg[0] & 0x0F)
     d1      = msg[1] if len(msg) > 1 else 0
     d2      = msg[2] if len(msg) > 2 else 0
 
     if status == MIDI_NOTE_ON and d2 > 0:
-        print(f"[MIDI] NOTE ON  ch={channel} {_note_name(d1)}({d1}) vel={d2}")
-        spawn_layer(d1, d2)
+        print(f"[MIDI] NOTE ON  ch={channel+1} {_note_name(d1)}({d1}) vel={d2}")
+        spawn_layer(d1, d2, channel=channel)
     elif status == MIDI_NOTE_OFF or (status == MIDI_NOTE_ON and d2 == 0):
-        print(f"[MIDI] NOTE OFF ch={channel} {_note_name(d1)}({d1})")
+        print(f"[MIDI] NOTE OFF ch={channel+1} {_note_name(d1)}({d1})")
         release_layer(d1)
     elif status == MIDI_CC:
-        name = _CC_NAMES.get(d1, f"CC{d1}")
+        name = _CC_NAMES.get(d1, f"CC{d1}"); ch_num = channel + 1
         if   d1 == 1:   state.brightness  = 0.1 + 0.9*(d2/127);  v=f"{state.brightness:.2f}"
         elif d1 == 7:   state.speed       = 0.2 + 3.8*(d2/127);  v=f"{state.speed:.2f}x"
         elif d1 == 10:  state.hue_shift   = d2/127*360;           v=f"{state.hue_shift:.0f}°"
@@ -431,9 +387,9 @@ def handle_midi_message(msg: bytes):
             state.strobe_rate=0.0; state.saturation=1.0; state.sustain=False; state.blur=0.0
             v="RESET"
         else: v="(unmapped)"
-        print(f"[MIDI] CC ch={channel} {name}({d1}) val={d2} → {v}")
+        print(f"[MIDI] CC ch={ch_num} {name}({d1}) val={d2} → {v}")
     elif status == MIDI_PITCHBEND:
-        print(f"[MIDI] PITCHBEND ch={channel} bend={((d2<<7)|d1)-8192:+d}")
+        print(f"[MIDI] PITCHBEND ch={channel+1} bend={((d2<<7)|d1)-8192:+d}")
 
 # ── RTP-MIDI ───────────────────────────────────────────────────────────────────
 _rtp_server: RTPMidiServer = None
@@ -450,7 +406,7 @@ def attract_mode_thread():
     while True:
         time.sleep(state.attract_interval)
         if state.attract_mode and time.time() - last_midi_time[0] > 10.0:
-            spawn_layer(random.randint(36, 84), random.randint(40, 100))
+            spawn_layer(random.randint(36, 84), random.randint(40, 100), channel=random.randint(0, 15))
 
 # ── display + FPS counter ──────────────────────────────────────────────────────
 def display_loop():
@@ -525,6 +481,7 @@ def display_loop():
 # ── main ───────────────────────────────────────────────────────────────────────
 def main():
     reload_config()
+    init_channel_map()
     print("╔══════════════════════════════════════════╗")
     print("║  Ubercorn MIDI Light Show  [optimised]   ║")
     print(f"║  {WIDTH}×{HEIGHT} grid  target {state.fps} fps            ║")
