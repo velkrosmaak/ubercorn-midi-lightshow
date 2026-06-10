@@ -107,8 +107,9 @@ def hsv_to_rgb_array(h, s, v, out=None) -> np.ndarray:
     h_shift = (h + state.hue_shift / 360.0) % 1.0
     s_val = float(np.clip(s * state.saturation, 0.0, 1.0))
     
+    v_np = np.asarray(v)
     if out is None:
-        out = np.empty(v.shape + (3,), dtype=np.float32)
+        out = np.empty(v_np.shape + (3,), dtype=np.float32)
 
     if np.isscalar(h_shift):
         # Fast path for uniform hue - calculate RGB scalar once
@@ -166,7 +167,7 @@ layer_lock = threading.Lock()
 
 def _get_rgb(L: Layer):
     """Calculate a single RGB scalar for the whole layer."""
-    return hsv_to_rgb_array(L.hue, 1.0, L.vel * L.alpha)[0,0]
+    return hsv_to_rgb_array(L.hue, 1.0, L.vel * L.alpha)
 
 def _effect_dot(L: Layer):
     _LAYER[:] = 0
