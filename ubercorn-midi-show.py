@@ -38,6 +38,7 @@ _BUF     = np.zeros((HEIGHT, WIDTH, 3), dtype=np.float32)
 _LAYER   = np.zeros((HEIGHT, WIDTH, 3), dtype=np.float32)
 _H_ARR   = np.zeros((HEIGHT, WIDTH),    dtype=np.float32)
 _V_ARR   = np.zeros((HEIGHT, WIDTH),    dtype=np.float32)
+_Y_GRID, _X_GRID = np.ogrid[:HEIGHT, :WIDTH]
 
 # ── state ──────────────────────────────────────────────────────────────────────
 class State:
@@ -199,12 +200,55 @@ def _effect_cross(L: Layer):
     _LAYER[:, L.cx] = rgb
     return _LAYER
 
+def _effect_diamond(L: Layer):
+    _LAYER[:] = 0
+    rgb = _get_rgb(L)
+    # Manhattan distance for a diamond shape
+    mask = (np.abs(_X_GRID - L.cx) + np.abs(_Y_GRID - L.cy)) <= 2
+    _LAYER[mask] = rgb
+    return _LAYER
+
+def _effect_x_cross(L: Layer):
+    _LAYER[:] = 0
+    rgb = _get_rgb(L)
+    adx = np.abs(_X_GRID - L.cx)
+    ady = np.abs(_Y_GRID - L.cy)
+    # Diagonals: where absolute offsets are equal
+    mask = (adx == ady) & (adx <= 3)
+    _LAYER[mask] = rgb
+    return _LAYER
+
+def _effect_box(L: Layer):
+    _LAYER[:] = 0
+    rgb = _get_rgb(L)
+    adx = np.abs(_X_GRID - L.cx)
+    ady = np.abs(_Y_GRID - L.cy)
+    # Hollow box using Chebyshev distance
+    mask = (np.maximum(adx, ady) == 2)
+    _LAYER[mask] = rgb
+    return _LAYER
+
+def _effect_circle(L: Layer):
+    _LAYER[:] = 0
+    rgb = _get_rgb(L)
+    # Squared distance to avoid sqrt()
+    d2 = (_X_GRID - L.cx)**2 + (_Y_GRID - L.cy)**2
+    mask = (d2 >= 4) & (d2 <= 12)
+    _LAYER[mask] = rgb
+    return _LAYER
+
+def _effect_plus_bold(L: Layer):
+    _LAYER[:] = 0
+    rgb = _get_rgb(L)
+    # A thicker, limited-length cross
+    mask = ((np.abs(_X_GRID - L.cx) <= 1) & (np.abs(_Y_GRID - L.cy) <= 3)) | \
+           ((np.abs(_Y_GRID - L.cy) <= 1) & (np.abs(_X_GRID - L.cx) <= 3))
+    _LAYER[mask] = rgb
+    return _LAYER
+
 _EFFECTS = [
-    _effect_dot,
-    _effect_v_line,
-    _effect_h_line,
-    _effect_square,
-    _effect_cross,
+    _effect_dot, _effect_v_line, _effect_h_line, _effect_square, _effect_cross,
+    _effect_diamond, _effect_x_cross, _effect_box, _effect_circle, _effect_plus_bold
 ]
 
 def init_channel_map():
