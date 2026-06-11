@@ -63,7 +63,7 @@ class State:
 state = State()
 _last_update_t = time.time()
 _last_cfg_mtime = [0.0]
-CHANNEL_EFFECTS = {}
+CHANNEL_CONFIG = {}
 
 def reload_config():
     try:
@@ -175,14 +175,34 @@ def _effect_dot(L: Layer):
     _LAYER[L.cy, L.cx] = _get_rgb(L)
     return _LAYER
 
-def _effect_v_line(L: Layer):
+def _effect_bullseye(L: Layer):
     _LAYER[:] = 0
-    _LAYER[:, L.cx] = _get_rgb(L)
+    rgb = _get_rgb(L)
+    d2 = (_X_GRID - L.cx)**2 + (_Y_GRID - L.cy)**2
+    # Two concentric rings
+    mask = ((d2 >= 1) & (d2 <= 4)) | ((d2 >= 16) & (d2 <= 25))
+    _LAYER[mask] = rgb
     return _LAYER
 
-def _effect_h_line(L: Layer):
+def _effect_hourglass(L: Layer):
     _LAYER[:] = 0
-    _LAYER[L.cy, :] = _get_rgb(L)
+    rgb = _get_rgb(L)
+    adx = np.abs(_X_GRID - L.cx)
+    ady = np.abs(_Y_GRID - L.cy)
+    # Vertical hourglass shape
+    mask = (adx <= ady) & (ady <= 3)
+    _LAYER[mask] = rgb
+    return _LAYER
+
+def _effect_star(L: Layer):
+    _LAYER[:] = 0
+    rgb = _get_rgb(L)
+    adx = np.abs(_X_GRID - L.cx)
+    ady = np.abs(_Y_GRID - L.cy)
+    # Combine cross and x_cross with a length limit
+    mask = ((adx == 0) & (ady <= 4)) | ((ady == 0) & (adx <= 4)) | \
+           ((adx == ady) & (adx <= 3))
+    _LAYER[mask] = rgb
     return _LAYER
 
 def _effect_square(L: Layer):
@@ -191,13 +211,6 @@ def _effect_square(L: Layer):
     y1, y2 = max(0, L.cy-1), min(HEIGHT, L.cy+2)
     x1, x2 = max(0, L.cx-1), min(WIDTH, L.cx+2)
     _LAYER[y1:y2, x1:x2] = rgb
-    return _LAYER
-
-def _effect_cross(L: Layer):
-    _LAYER[:] = 0
-    rgb = _get_rgb(L)
-    _LAYER[L.cy, :] = rgb
-    _LAYER[:, L.cx] = rgb
     return _LAYER
 
 def _effect_diamond(L: Layer):
@@ -280,11 +293,11 @@ def _effect_slash(L: Layer):
     _LAYER[mask] = rgb
     return _LAYER
 
-def _effect_h_bar(L: Layer):
+def _effect_zigzag(L: Layer):
     _LAYER[:] = 0
     rgb = _get_rgb(L)
-    # A thick horizontal bar
-    mask = (np.abs(_Y_GRID - L.cy) <= 1) & (np.abs(_X_GRID - L.cx) <= 3)
+    dx = _X_GRID - L.cx
+    mask = (np.abs(dx) <= 4) & (_Y_GRID == L.cy + (dx % 2))
     _LAYER[mask] = rgb
     return _LAYER
 
@@ -298,10 +311,10 @@ def _effect_ring_small(L: Layer):
     return _LAYER
 
 _EFFECTS = [
-    _effect_dot, _effect_v_line, _effect_h_line, _effect_square, _effect_cross,
+    _effect_dot, _effect_bullseye, _effect_hourglass, _effect_square, _effect_star,
     _effect_diamond, _effect_x_cross, _effect_box, _effect_circle, _effect_plus_bold,
     _effect_triangle, _effect_l_shape, _effect_parallel_v, _effect_slash,
-    _effect_h_bar, _effect_ring_small
+    _effect_zigzag, _effect_ring_small
 ]
 
 def init_channel_map():
