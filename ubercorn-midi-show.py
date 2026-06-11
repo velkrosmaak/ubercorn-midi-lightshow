@@ -60,6 +60,8 @@ class State:
     midi_port      = 5004
     time           = 0.0
     pulse_count    = 0
+    min_note       = 127
+    max_note       = 0
 
 state = State()
 _last_update_t = time.time()
@@ -111,7 +113,9 @@ def hsv_to_rgb_array(h, s, v, out=None) -> np.ndarray:
     
     v_np = np.asarray(v)
     if out is None:
-        out = np.empty(v_np.shape + (3,), dtype=np.float32)
+        # Ensure output shape matches the broadcasted result of hue and value
+        out_shape = np.broadcast(h_shift, v).shape
+        out = np.empty(out_shape + (3,), dtype=np.float32)
 
     if np.isscalar(h_shift):
         # Fast path for uniform hue - calculate RGB scalar once
@@ -128,7 +132,8 @@ def hsv_to_rgb_array(h, s, v, out=None) -> np.ndarray:
         # Vectorised path for varying hue
         i = (h_shift * 6.0).astype(np.int32)
         f = h_shift * 6.0 - i
-        v255 = v * 255.0
+        # Broadcast v to match the hue array shape
+        v255 = np.broadcast_to(v * 255.0, i.shape)
         p, q, t = v255 * (1.0 - s_val), v255 * (1.0 - f * s_val), v255 * (1.0 - (1.0 - f) * s_val)
         i %= 6
         
@@ -281,8 +286,8 @@ def _effect_l_shape(L: Layer):
 def _effect_parallel_v(L: Layer):
     _LAYER[:] = 0
     rgb = _get_rgb(L)
-    # Two vertical lines spaced apart
-    mask = (np.abs(_X_GRID - L.cx) == 2)
+    # Forces the mask to (16, 16) by broadcasting against the Y grid
+    mask = (np.abs(_X_GRID - L.cx) == 2) & (_Y_GRID >= 0)
     _LAYER[mask] = rgb
     return _LAYER
 
@@ -399,10 +404,22 @@ def spawn_layer(note: int, velocity: int, channel: int = 0):
         cfg = CHANNEL_CONFIG.get(channel, {'effect_id': 0, 'base_hue': 0.0})
         eid = cfg['effect_id']
         
-        # Map note to grid position: low notes bottom/left, high notes top/right
-        rel_note = np.clip(note - 36, 0, 72)
-        cx = int(rel_note % WIDTH)
-        cy = int((rel_note // 8) % HEIGHT)
+        # Update note range bounds for auto-scaling
+        state.min_note = min(state.min_note, note)
+        state.max_note = max(state.max_note, note)
+        
+        # Map note to grid position: auto-scaled to fill the matrix based on seen range
+        note_range = state.max_note - state.min_note
+        if note_range > 0:
+            # Calculate linear index 0..255 based on relative pitch within current range
+            normalized = (note - state.min_note) / note_range
+            grid_idx = int(normalized * (WIDTH * HEIGHT - 1))
+        else:
+            grid_idx = (WIDTH * HEIGHT) // 2
+            
+        cx = grid_idx % WIDTH
+        cy = grid_idx // WIDTH
+
         layer  = Layer(
             note      = note,
             velocity  = velocity,
