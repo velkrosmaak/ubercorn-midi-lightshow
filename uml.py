@@ -67,6 +67,7 @@ MIDI_NOTE_OFF  = 0x80
 MIDI_NOTE_ON   = 0x90
 MIDI_CC        = 0xB0
 MIDI_PITCHBEND = 0xE0
+MIDI_CLOCK     = 0xF8
 
 # colour palette banks (hue ranges per bank, chosen by note velocity zone)
 PALETTE_BANKS = [
@@ -522,6 +523,9 @@ def midi_server_thread(host: str, port: int):
                         msg = midi_bytes[i:i+3]
                         handle_midi_message(msg)
                         i += 3
+                    elif b == MIDI_CLOCK:
+                        handle_midi_message(bytes([b]))
+                        i += 1
                     else:
                         i += 1
                 else:
@@ -591,6 +595,11 @@ def attract_mode_thread():
 _orig_handle = handle_midi_message
 def handle_midi_message(msg_bytes: bytes):
     last_midi_time[0] = time.time()
+    if not msg_bytes:
+        return
+    if msg_bytes[0] == MIDI_CLOCK:
+        # Pass clock through to the original handler if it supports it
+        pass 
     _orig_handle(msg_bytes)
 
 # ── main ───────────────────────────────────────────────────────────────────────

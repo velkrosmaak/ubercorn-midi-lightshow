@@ -349,6 +349,9 @@ class RTPMidiServer:
                     if end == -1:
                         break
                     i = end + 1
+                elif b >= 0xF8:                                    # real-time (Clock, Start, Stop)
+                    self.midi_callback(bytes([b]))
+                    i += 1
                 else:
                     i += 1
             else:

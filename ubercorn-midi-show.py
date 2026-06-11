@@ -59,6 +59,7 @@ class State:
     midi_host      = "0.0.0.0"
     midi_port      = 5004
     time           = 0.0
+    pulse_count    = 0
 
 state = State()
 _last_update_t = time.time()
@@ -317,14 +318,19 @@ _EFFECTS = [
     _effect_zigzag, _effect_ring_small
 ]
 
-def init_channel_map():
-    """Assign a unique effect and color scheme to each of the 16 MIDI channels."""
+def init_channel_map(randomize=False):
+    """Assign a unique effect and color scheme to each of the 16 MIDI channels.
+    If randomize is True, offsets the starting points to create new combinations."""
     global CHANNEL_CONFIG
+    hue_offset = random.random() if randomize else 0.0
+    effect_offset = random.randint(0, len(_EFFECTS) - 1) if randomize else 0
+
     for ch in range(16):
         # Assign unique effect (wraps around if fewer than 16 effects)
-        eid = ch % len(_EFFECTS)
+        eid = (ch + effect_offset) % len(_EFFECTS)
         # Assign unique hue (0.0 to 1.0) based on channel index
-        base_hue = ch / 16.0
+        base_hue = (ch / 16.0 + hue_offset) % 1.0
+
         CHANNEL_CONFIG[ch] = {
             'effect_id': eid,
             'base_hue': base_hue
@@ -442,6 +448,7 @@ MIDI_NOTE_OFF  = 0x80
 MIDI_NOTE_ON   = 0x90
 MIDI_CC        = 0xB0
 MIDI_PITCHBEND = 0xE0
+MIDI_CLOCK     = 0xF8
 
 last_midi_time = [time.time()]
 _NOTE_NAMES = ['C','C#','D','D#','E','F','F#','G','G#','A','A#','B']
@@ -453,6 +460,17 @@ def _note_name(n: int) -> str:
 
 def handle_midi_message(msg: bytes):
     last_midi_time[0] = time.time()
+    if not msg:
+        return
+
+    # Handle MIDI Clock pulses (24 pulses per quarter note)
+    if msg[0] == MIDI_CLOCK:
+        state.pulse_count += 1
+        if state.pulse_count >= 768:  # 32 beats * 24 pulses
+            state.pulse_count = 0
+            init_channel_map(randomize=True)
+        return
+
     if len(msg) < 2:
         return
     status  = msg[0] & 0xF0
