@@ -246,16 +246,76 @@ def _effect_plus_bold(L: Layer):
     _LAYER[mask] = rgb
     return _LAYER
 
+def _effect_triangle(L: Layer):
+    _LAYER[:] = 0
+    rgb = _get_rgb(L)
+    # Mask for an upward pointing triangle
+    mask = (np.abs(_X_GRID - L.cx) <= (L.cy - _Y_GRID)) & \
+           (_Y_GRID <= L.cy) & (_Y_GRID >= L.cy - 3)
+    _LAYER[mask] = rgb
+    return _LAYER
+
+def _effect_l_shape(L: Layer):
+    _LAYER[:] = 0
+    rgb = _get_rgb(L)
+    # A simple 4x4 L-shape mask
+    mask = ((_X_GRID == L.cx) & (_Y_GRID >= L.cy) & (_Y_GRID <= L.cy + 3)) | \
+           ((_Y_GRID == L.cy) & (_X_GRID >= L.cx) & (_X_GRID <= L.cx + 3))
+    _LAYER[mask] = rgb
+    return _LAYER
+
+def _effect_parallel_v(L: Layer):
+    _LAYER[:] = 0
+    rgb = _get_rgb(L)
+    # Two vertical lines spaced apart
+    mask = (np.abs(_X_GRID - L.cx) == 2)
+    _LAYER[mask] = rgb
+    return _LAYER
+
+def _effect_slash(L: Layer):
+    _LAYER[:] = 0
+    rgb = _get_rgb(L)
+    # Forward slash diagonal
+    mask = ((_X_GRID - L.cx) == -(_Y_GRID - L.cy)) & (np.abs(_X_GRID - L.cx) <= 3)
+    _LAYER[mask] = rgb
+    return _LAYER
+
+def _effect_h_bar(L: Layer):
+    _LAYER[:] = 0
+    rgb = _get_rgb(L)
+    # A thick horizontal bar
+    mask = (np.abs(_Y_GRID - L.cy) <= 1) & (np.abs(_X_GRID - L.cx) <= 3)
+    _LAYER[mask] = rgb
+    return _LAYER
+
+def _effect_ring_small(L: Layer):
+    _LAYER[:] = 0
+    rgb = _get_rgb(L)
+    d2 = (_X_GRID - L.cx)**2 + (_Y_GRID - L.cy)**2
+    # A tiny ring of pixels
+    mask = (d2 == 1) | (d2 == 2)
+    _LAYER[mask] = rgb
+    return _LAYER
+
 _EFFECTS = [
     _effect_dot, _effect_v_line, _effect_h_line, _effect_square, _effect_cross,
-    _effect_diamond, _effect_x_cross, _effect_box, _effect_circle, _effect_plus_bold
+    _effect_diamond, _effect_x_cross, _effect_box, _effect_circle, _effect_plus_bold,
+    _effect_triangle, _effect_l_shape, _effect_parallel_v, _effect_slash,
+    _effect_h_bar, _effect_ring_small
 ]
 
 def init_channel_map():
-    """Assign a random consistent effect to each of the 16 MIDI channels."""
-    global CHANNEL_EFFECTS
+    """Assign a unique effect and color scheme to each of the 16 MIDI channels."""
+    global CHANNEL_CONFIG
     for ch in range(16):
-        CHANNEL_EFFECTS[ch] = random.randint(0, len(_EFFECTS) - 1)
+        # Assign unique effect (wraps around if fewer than 16 effects)
+        eid = ch % len(_EFFECTS)
+        # Assign unique hue (0.0 to 1.0) based on channel index
+        base_hue = ch / 16.0
+        CHANNEL_CONFIG[ch] = {
+            'effect_id': eid,
+            'base_hue': base_hue
+        }
 
 # ── background – simple hue-cycling gradient ───────────────────────────────────
 _bg_t = [0.0]
@@ -315,8 +375,11 @@ def spawn_layer(note: int, velocity: int, channel: int = 0):
         for l in layers:
             if l.note == note:
                 l.decay = 0.05          # accelerate existing note
-        lo, hi = _pick_palette(velocity)
-        eid    = CHANNEL_EFFECTS.get(channel, 0)
+        
+        # Get the unique config for this channel
+        cfg = CHANNEL_CONFIG.get(channel, {'effect_id': 0, 'base_hue': 0.0})
+        eid = cfg['effect_id']
+        
         # Map note to grid position: low notes bottom/left, high notes top/right
         rel_note = np.clip(note - 36, 0, 72)
         cx = int(rel_note % WIDTH)
@@ -324,7 +387,7 @@ def spawn_layer(note: int, velocity: int, channel: int = 0):
         layer  = Layer(
             note      = note,
             velocity  = velocity,
-            hue       = random.uniform(lo, hi),
+            hue       = cfg['base_hue'],
             decay     = 0.1 + 0.1 * (velocity / 127.0),
             effect_id = eid,
             cx        = cx,
